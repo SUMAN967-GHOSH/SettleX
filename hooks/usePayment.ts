@@ -11,6 +11,7 @@ import { useToast } from "@/components/ui/Toast";
 import { NETWORK_PASSPHRASE, STELLAR_EXPLORER, CONTRACT_ID } from "@/lib/utils/constants";
 import { formatXLM } from "@/lib/utils";
 import { countMetric, reportError } from "@/lib/observability/logger";
+import { userFacingMessage } from "@/lib/errors/userMessage";
 import type { SplitShare } from "@/types/expense";
 
 type OnChainStep = "simulating" | "signing" | "sending" | "confirming";
@@ -247,7 +248,13 @@ export function usePayment({ expenseId }: UsePaymentOpts) {
       } catch (err) {
         const message    = err instanceof Error ? err.message : "Payment failed. Please try again.";
         const isRejected = /reject|denied|cancel/i.test(message.toLowerCase());
-        const display    = isRejected ? "Transaction cancelled in wallet." : message;
+        // Same reason as app/error.tsx: a failure mid-payment can be a raw
+        // PostgREST or RPC error, and this string is rendered straight into the
+        // payment panel. Vetted messages (wallet and contract errors are written
+        // for users) still show; anything internal becomes the generic line.
+        const display    = isRejected
+          ? "Transaction cancelled in wallet."
+          : userFacingMessage(err).message;
 
         // A user declining in their wallet is normal traffic, not a fault; it is
         // counted but not reported, so it cannot drown the real failures.

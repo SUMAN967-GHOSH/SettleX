@@ -109,6 +109,44 @@ A reporter is a network client, so `reportError` calls it inside its own
 try/catch: a broken reporter must never turn a handled 503 into a crash. It
 logs `observability.reporter_failed` instead.
 
+## What a user is allowed to see
+
+`lib/errors/userMessage.ts` decides what an error boundary or toast may display.
+`app/error.tsx` used to render `error.message` verbatim, and because the Supabase
+paths re-throw raw PostgREST errors it could print
+
+```
+new row violates row-level security policy for table "expenses"
+```
+
+at a user — leaking the schema and the fact that RLS is the gate.
+
+It is an **allowlist**, not a blanket hide. Much of the app throws text written
+for people ("Lobstr extension is not installed.", "Pool balance is insufficient
+for this transfer."), and replacing those with "something went wrong" would make
+the product worse. A message is shown only when it reads like authored prose and
+trips none of the internal markers — Postgres/PostgREST wording, stack frames,
+JSON dumps, tokens, wallet addresses, protocol jargon such as `JWT`, framework
+errors. Anything else becomes a generic line. **The safe default is to hide**, so
+a newly added internal error is suppressed until someone deliberately makes it
+user-facing.
+
+```ts
+import { userFacingMessage } from "@/lib/errors/userMessage";
+
+const { message, wasSuppressed } = userFacingMessage(err);
+```
+
+Suppression changes only what is **displayed** — the full error always reaches
+`reportError`, and `fields.messageSuppressed` records that a substitution
+happened, so a message that *should* have been user-facing can be spotted and
+reworded rather than silently swallowed.
+
+Use it at every surface that renders error text: both boundaries, the payment
+panel, settlement toasts, the wallet connect toast, and the trip page's degraded
+banner. `app/global-error.tsx` goes further and never shows a message at all — a
+crash that deep is always internal, so only the reference id is useful.
+
 ## Where it is installed
 
 - **Server** — `instrumentation.ts`, before the boot-time config check, so a
@@ -133,6 +171,8 @@ logs `observability.reporter_failed` instead.
 | `payment.onchain_record_failed` | **XLM moved but the contract has no record** — ledger and app disagree. |
 | `expense.mark_share_paid_failed` | Payment settled on-chain but the database does not show it. |
 | `*.rls_denied` (via `fields.kind`) | RLS rejected a write — auth or policy problem. |
+| `auth.session_handshake_failed` | A wallet could not establish a session; users are stuck on cached data. |
+| `auth.signup_failed` / `auth.signin_failed` | An unrecognised database failure blocked account creation or sign-in. |
 | `trip.realtime_failed` / `expense.realtime_failed` | Lists silently stop updating. |
 | `contract.fetch_events_failed` | Sustained = the Soroban RPC is down. |
 | `observability.no_error_provider` | This deployment has no error tracker wired up. |
