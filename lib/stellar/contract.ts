@@ -14,6 +14,7 @@ import {
   NETWORK_PASSPHRASE,
   HORIZON_URL,
 } from "@/lib/utils/constants";
+import { logWarn, reportError } from "@/lib/observability/logger";
 import type {
   ContractPaymentRecord,
   GetPaymentsResult,
@@ -109,10 +110,12 @@ export { xlmToStroops, stroopsToXlm } from "@/lib/split/calculator";
 
 function contractReady(caller: string): boolean {
   if (!CONTRACT_ID) {
-    console.info(
-      `[SettleX] ${caller}: CONTRACT_ID not set — skipping on-chain step. ` +
-      "Deploy the contract and add NEXT_PUBLIC_CONTRACT_ID to .env.local."
-    );
+    logWarn("contract.not_configured", {
+      fields: { caller },
+      message:
+        "CONTRACT_ID not set — skipping on-chain step. Deploy the contract and " +
+        "set NEXT_PUBLIC_CONTRACT_ID.",
+    });
     return false;
   }
   return true;
@@ -244,7 +247,9 @@ export async function recordPaymentOnChain(
     throw new Error("Contract transaction timed out waiting for confirmation.");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Contract call failed.";
-    console.error("[SettleX:contract] recordPaymentOnChain error:", message);
+    reportError("contract.record_payment_failed", err, {
+      fields: { tripId, expenseId, txHash },
+    });
     return { success: false, error: message };
   }
 }
@@ -314,7 +319,12 @@ export async function getContractPayments(
     return { payments, success: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to read contract payments.";
-    console.warn("[SettleX:contract] getContractPayments:", message);
+    // A read failure is usually the Soroban RPC being down rather than a bug
+    // here, so it is a warning — but a countable one, since the UI silently
+    // falls back to an empty list.
+    logWarn("contract.read_payments_failed", {
+      fields: { tripId, error: message },
+    });
     return { payments: [], success: false, error: message };
   }
 }
@@ -361,7 +371,7 @@ export async function checkIsPaid(
     return { paid, success: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to check on-chain payment status.";
-    console.warn("[SettleX:contract] checkIsPaid:", message);
+    logWarn("contract.check_is_paid_failed", { fields: { expenseId, error: message } });
     return { paid: false, success: false, error: message };
   }
 }
