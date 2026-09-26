@@ -11,6 +11,14 @@ import { NextRequest, NextResponse } from "next/server";
  *
  * `style-src` still allows inline styles because Framer Motion and Tailwind
  * inject style attributes at runtime; there is no nonce path for those.
+ *
+ * This is the ONLY place a Content-Security-Policy is set for documents.
+ * `next.config.mjs` used to also send a much weaker
+ * `Content-Security-Policy-Report-Only` that reported nowhere; it has been
+ * removed. If a violation needs fixing, fix it here — do not add a second
+ * policy, and never relax one to satisfy the other. The one CSP that file still
+ * sets covers static assets only (the paths this `matcher` skips), and is
+ * strictly tighter than this policy.
  */
 export function middleware(request: NextRequest) {
   const isDev = process.env.NODE_ENV === "development";
@@ -53,6 +61,9 @@ export function middleware(request: NextRequest) {
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
+    // Paired with `X-Frame-Options: DENY` in next.config.mjs. Older browsers
+    // read only the header, newer ones prefer this directive; if the two ever
+    // disagree, the weaker answer wins on some client. Change both or neither.
     `frame-ancestors 'none'`,
     `upgrade-insecure-requests`,
   ]
