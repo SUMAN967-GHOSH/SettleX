@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { newCorrelationId, reportError } from "@/lib/observability/logger";
 
 export default function ErrorBoundary({
   error,
@@ -9,9 +10,18 @@ export default function ErrorBoundary({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // Generated per error so the id shown to the user matches the reported one.
+  const [correlationId] = useState(newCorrelationId);
+
   useEffect(() => {
-    console.error(error);
-  }, [error]);
+    // Replaces a bare console.error into a console nobody reads: this goes to
+    // the installed reporter as well. `digest` is React's own id for the
+    // server-side error, and is what ties this to the server log line.
+    reportError("ui.render_error", error, {
+      correlationId,
+      fields: { digest: error.digest, boundary: "app/error" },
+    });
+  }, [error, correlationId]);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-[#F6F6F6] text-center">
@@ -26,6 +36,11 @@ export default function ErrorBoundary({
         >
           Try again
         </button>
+        {/* Gives the user something to quote in a support report that points
+            straight at the reported error. */}
+        <p className="mt-4 text-[11px] text-[#AAA] font-mono break-all">
+          Reference: {error.digest ?? correlationId}
+        </p>
       </div>
     </div>
   );
