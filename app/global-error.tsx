@@ -12,6 +12,12 @@
  *
  * Styles are inline for the same reason: if the failure was in the layout, the
  * stylesheet may never have loaded.
+ *
+ * Unlike `app/error.tsx`, this boundary never renders `error.message` at all,
+ * not even a vetted one. A failure this deep is a provider or bundle crash whose
+ * message is always internal ("Cannot read properties of undefined", a hydration
+ * mismatch), so there is nothing here worth showing a user — only the reference
+ * id and a way out. The detail goes to the reporter.
  */
 import { useEffect, useState } from "react";
 import { newCorrelationId, reportError } from "@/lib/observability/logger";
