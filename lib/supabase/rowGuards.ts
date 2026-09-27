@@ -27,6 +27,22 @@ function asBoolean(value: unknown, field: string): boolean {
   return value;
 }
 
+function asOptionalFiniteNumber(value: unknown, field: string): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Invalid value for ${field}: expected finite number.`);
+  }
+  return value;
+}
+
+function asVersion(value: unknown): number {
+  if (value == null) return 1;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error("Invalid value for version: expected positive integer.");
+  }
+  return value;
+}
+
 function asStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
     throw new Error(`Invalid value for ${field}: expected string[]`);
@@ -58,7 +74,7 @@ export function parseExpenseRow(row: unknown): Expense {
       id: asString(member.id, "members[].id"),
       name: asString(member.name, "members[].name"),
       walletAddress: asOptionalString(member.walletAddress, "members[].walletAddress"),
-      weight: typeof member.weight === "number" ? member.weight : undefined,
+      weight: asOptionalFiniteNumber(member.weight, "members[].weight"),
     })),
     shares: asRecordArray(row.shares, "shares").map((share) => ({
       memberId: asString(share.memberId, "shares[].memberId"),
@@ -72,7 +88,7 @@ export function parseExpenseRow(row: unknown): Expense {
     })),
     createdAt: asString(row.created_at, "created_at"),
     settled: asBoolean(row.settled, "settled"),
-    version: typeof row.version === "number" ? row.version : 1,
+    version: asVersion(row.version),
   };
 
   if (!expense.members.every((member) => typeof member.id === "string" && typeof member.name === "string")) {
@@ -99,7 +115,7 @@ export function parseTripRow(row: unknown): Trip {
       id: asString(member.id, "members[].id"),
       name: asString(member.name, "members[].name"),
       walletAddress: asOptionalString(member.walletAddress, "members[].walletAddress"),
-      weight: typeof member.weight === "number" ? member.weight : undefined,
+      weight: asOptionalFiniteNumber(member.weight, "members[].weight"),
     })),
     expenseIds: asStringArray(row.expense_ids, "expense_ids"),
     createdAt: asString(row.created_at, "created_at"),
