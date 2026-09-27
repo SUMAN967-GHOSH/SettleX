@@ -85,21 +85,8 @@ function isRowForWallet(row: any, walletAddress: string | null): boolean {
  */
 export class ExpenseConflictError extends Error {}
 
-function dbRowToExpense(row: any): Expense {
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description ?? undefined,
-    totalAmount: row.total_amount,
-    currency: row.currency,
-    splitMode: row.split_mode,
-    paidByMemberId: row.paid_by_member_id,
-    members: row.members,
-    shares: row.shares,
-    createdAt: row.created_at,
-    settled: row.settled,
-    version: row.version ?? 1,
-  };
+function dbRowToExpense(row: unknown): Expense {
+  return parseExpenseRow(row);
 }
 
 function expenseToDbInsertRow(expense: Expense, creatorWallet: string) {

@@ -20,8 +20,7 @@ import type {
   SupabaseClient,
 } from "@supabase/supabase-js";
 import { useWalletContext } from "./WalletContext";
-import { logWarn, reportError } from "@/lib/observability/logger";
-import { supabaseErrorFields } from "@/lib/observability/supabaseError";
+import { parseTripRow } from "@/lib/supabase/rowGuards";
 
 
 /**
@@ -79,17 +78,8 @@ function isRowForWallet(row: any, walletAddress: string | null): boolean {
   return memberWallets.has(walletAddress);
 }
 
-function dbRowToTrip(row: any): Trip {
-  return {
-    id: row.id,
-    name: row.name,
-    description: row.description ?? undefined,
-    members: row.members,
-    expenseIds: row.expense_ids,
-    createdAt: row.created_at,
-    createdByWallet: row.created_by_wallet ?? undefined,
-    settled: row.settled,
-  };
+function dbRowToTrip(row: unknown): Trip {
+  return parseTripRow(row);
 }
 
 function tripToDbInsertRow(trip: Trip, creatorWallet: string) {
