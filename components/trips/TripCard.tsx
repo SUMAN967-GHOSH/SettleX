@@ -27,6 +27,11 @@ export function TripCard({
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const isOwner =
     !!currentUserPublicKey && trip.createdByWallet === currentUserPublicKey;
+
+  React.useEffect(() => {
+    if (!isOwner) setConfirmDelete(false);
+  }, [isOwner]);
+
   const createdAt = new Date(trip.createdAt).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
