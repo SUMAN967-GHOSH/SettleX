@@ -20,7 +20,8 @@ import type {
   SupabaseClient,
 } from "@supabase/supabase-js";
 import { useWalletContext } from "./WalletContext";
-import { parseExpenseRow } from "@/lib/supabase/rowGuards";
+import { logWarn, reportError } from "@/lib/observability/logger";
+import { supabaseErrorFields } from "@/lib/observability/supabaseError";
 
 
 /**
@@ -152,7 +153,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((err) => {
         if (cancelled) return;
-        console.warn("Wallet sign-in failed — falling back to cached data:", err);
+        logWarn("expense.signin_failed_using_cache", {
+          fields: { ...supabaseErrorFields(err), error: err instanceof Error ? err.message : String(err) },
+        });
         setClient(null);
       });
 
@@ -205,7 +208,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
           localStorage.setItem(cacheKey, JSON.stringify(expenses));
         }
       } catch (err) {
-        console.warn("Failed to load from Supabase, using localStorage:", err);
+        logWarn("expense.load_failed_using_cache", { fields: supabaseErrorFields(err) });
         try {
           const raw = localStorage.getItem(cacheKey);
           if (raw && isMounted) setExpenses(JSON.parse(raw) as Expense[]);
@@ -283,7 +286,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       )
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-          console.error("Expenses realtime subscription failed", { status, err });
+          // Realtime dying is silent to the user: the list simply stops
+          // updating, so it must be reported rather than printed.
+          reportError("expense.realtime_failed", err, { fields: { status } });
         }
       });
 
@@ -407,7 +412,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
           return synced;
         });
       } catch (err) {
-        console.error("Failed to update expense in Supabase:", err);
+        reportError("expense.update_failed", err, {
+          fields: { expenseId: id, ...supabaseErrorFields(err) },
+        });
         // A conflict already replaced local state with the winning row. Rolling
         // back to `current` here would overwrite it with the very stale copy
         // this guard exists to reject.
@@ -444,7 +451,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
 
         if (error) throw error;
       } catch (err) {
-        console.error("Failed to delete expense from Supabase:", err);
+        reportError("expense.delete_failed", err, {
+          fields: { expenseId: id, ...supabaseErrorFields(err) },
+        });
         // Roll back optimistic deletion on error
         setExpenses((prev) => {
           if (prev.some((e) => e.id === id)) return prev;
@@ -502,7 +511,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
             rpcSucceeded = true;
           }
         } catch (rpcErr) {
-          console.warn("mark_share_paid RPC failed or not installed, falling back to OCC retry:", rpcErr);
+          logWarn("expense.mark_share_paid_rpc_unavailable", {
+            fields: { expenseId, ...supabaseErrorFields(rpcErr) },
+          });
         }
 
         if (rpcSucceeded) return;
@@ -585,7 +596,11 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
 
         throw lastError || new Error("Failed to record payment due to concurrent updates. Please try again.");
       } catch (err) {
-        console.error("Failed to persist markSharePaid to Supabase:", err);
+        // The payment settled on Stellar but the database does not reflect it:
+        // the ledger and the app now disagree about who has paid.
+        reportError("expense.mark_share_paid_failed", err, {
+          fields: { expenseId, ...supabaseErrorFields(err) },
+        });
         setExpenses((prev) => {
           const rolled = prev.map((e) => (e.id === expenseId ? current : e));
           localStorage.setItem(cacheKey, JSON.stringify(rolled));
