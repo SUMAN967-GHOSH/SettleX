@@ -85,6 +85,7 @@ function dbRowToTrip(row: any): Trip {
     members: row.members,
     expenseIds: row.expense_ids,
     createdAt: row.created_at,
+    createdByWallet: row.created_by_wallet ?? undefined,
     settled: row.settled,
   };
 }
