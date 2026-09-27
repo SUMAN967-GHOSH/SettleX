@@ -153,63 +153,79 @@ export class StellarWalletsKit {
   private injectModal(opts: WalletModalOptions, resolve: () => void): void {
     this.destroyModal();
 
-    const title       = opts.modalTitle      ?? "Connect Wallet";
+    const title = opts.modalTitle ?? "Connect Wallet";
     const unavailText = opts.notAvailableText ?? "Not installed";
+    const lastFocused = document.activeElement as HTMLElement | null;
 
     const overlay = document.createElement("div");
     overlay.setAttribute("data-settlex-wallet-modal", "true");
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-labelledby", "settlex-wallet-modal-title");
+    overlay.setAttribute("aria-describedby", "settlex-wallet-modal-description");
     Object.assign(overlay.style, {
-      position:        "fixed",
-      inset:           "0",
-      background:      "rgba(0,0,0,0.55)",
-      backdropFilter:  "blur(4px)",
-      display:         "flex",
-      alignItems:      "center",
-      justifyContent:  "center",
-      zIndex:          "99999",
-      fontFamily:      "Poppins, system-ui, sans-serif",
+      position: "fixed",
+      inset: "0",
+      background: "rgba(0,0,0,0.55)",
+      backdropFilter: "blur(4px)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: "99999",
+      fontFamily: "Poppins, system-ui, sans-serif",
     } as Partial<CSSStyleDeclaration>);
 
     const card = document.createElement("div");
+    card.tabIndex = -1;
     Object.assign(card.style, {
-      background:   "#fff",
+      background: "#fff",
       borderRadius: "20px",
-      padding:      "28px 24px",
-      width:        "360px",
-      maxWidth:     "calc(100vw - 32px)",
-      boxShadow:    "0 24px 80px -12px rgba(0,0,0,0.25)",
+      padding: "28px 24px",
+      width: "360px",
+      maxWidth: "calc(100vw - 32px)",
+      boxShadow: "0 24px 80px -12px rgba(0,0,0,0.25)",
+      outline: "none",
     } as Partial<CSSStyleDeclaration>);
 
     const header = document.createElement("div");
     Object.assign(header.style, {
-      display:        "flex",
+      display: "flex",
       justifyContent: "space-between",
-      alignItems:     "center",
-      marginBottom:   "20px",
+      alignItems: "center",
+      marginBottom: "20px",
     } as Partial<CSSStyleDeclaration>);
 
     const titleEl = document.createElement("h2");
+    titleEl.id = "settlex-wallet-modal-title";
     titleEl.textContent = title;
     Object.assign(titleEl.style, {
-      fontSize:   "17px",
+      fontSize: "17px",
       fontWeight: "700",
-      color:      "#0F0F14",
-      margin:     "0",
+      color: "#0F0F14",
+      margin: "0",
     } as Partial<CSSStyleDeclaration>);
 
+    const descEl = document.createElement("p");
+    descEl.id = "settlex-wallet-modal-description";
+    descEl.textContent = "Choose a wallet to continue signing in and connecting to Stellar.";
+    descEl.style.display = "none";
+
     const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close wallet selector");
     closeBtn.innerHTML = "&#x2715;";
     Object.assign(closeBtn.style, {
-      background:  "none",
-      border:      "none",
-      fontSize:    "18px",
-      color:       "#999",
-      cursor:      "pointer",
-      padding:     "4px",
-      lineHeight:  "1",
+      background: "none",
+      border: "none",
+      fontSize: "18px",
+      color: "#999",
+      cursor: "pointer",
+      padding: "4px",
+      lineHeight: "1",
     } as Partial<CSSStyleDeclaration>);
     closeBtn.addEventListener("click", () => {
       this.destroyModal();
+      if (lastFocused) lastFocused.focus();
       opts.onClosed?.();
       resolve();
     });
@@ -219,73 +235,77 @@ export class StellarWalletsKit {
 
     const list = document.createElement("div");
     Object.assign(list.style, {
-      display:       "flex",
+      display: "flex",
       flexDirection: "column",
-      gap:           "10px",
+      gap: "10px",
     } as Partial<CSSStyleDeclaration>);
+
+    const focusableButtons: HTMLButtonElement[] = [];
 
     SUPPORTED_WALLETS.forEach((wallet) => {
       const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("role", "button");
       Object.assign(btn.style, {
-        display:       "flex",
-        alignItems:    "center",
-        gap:           "14px",
-        padding:       "14px 16px",
-        border:        "1.5px solid #E5E5E5",
-        borderRadius:  "12px",
-        background:    "#fff",
-        cursor:        "pointer",
-        width:         "100%",
-        textAlign:     "left",
-        transition:    "border-color 0.15s, background 0.15s",
+        display: "flex",
+        alignItems: "center",
+        gap: "14px",
+        padding: "14px 16px",
+        border: "1.5px solid #E5E5E5",
+        borderRadius: "12px",
+        background: "#fff",
+        cursor: "pointer",
+        width: "100%",
+        textAlign: "left",
+        transition: "border-color 0.15s, background 0.15s",
       } as Partial<CSSStyleDeclaration>);
 
       btn.addEventListener("mouseenter", () => {
         btn.style.borderColor = "#B9FF66";
-        btn.style.background  = "#F8FFF0";
+        btn.style.background = "#F8FFF0";
       });
       btn.addEventListener("mouseleave", () => {
         btn.style.borderColor = "#E5E5E5";
-        btn.style.background  = "#fff";
+        btn.style.background = "#fff";
       });
 
       const img = document.createElement("img");
-      img.src   = wallet.logoUrl;
-      img.alt   = wallet.name;
+      img.src = wallet.logoUrl;
+      img.alt = wallet.name;
       Object.assign(img.style, { width: "32px", height: "32px", borderRadius: "8px" });
 
       const nameEl = document.createElement("span");
       nameEl.textContent = wallet.name;
       Object.assign(nameEl.style, {
-        fontSize:   "15px",
+        fontSize: "15px",
         fontWeight: "600",
-        color:      "#0F0F14",
-        flex:       "1",
+        color: "#0F0F14",
+        flex: "1",
       } as Partial<CSSStyleDeclaration>);
 
       const badge = document.createElement("span");
       Object.assign(badge.style, {
-        fontSize:     "11px",
-        fontWeight:   "600",
-        padding:      "3px 8px",
+        fontSize: "11px",
+        fontWeight: "600",
+        padding: "3px 8px",
         borderRadius: "6px",
-        background:   "#F0F0F0",
-        color:        "#999",
+        background: "#F0F0F0",
+        color: "#999",
       } as Partial<CSSStyleDeclaration>);
       badge.textContent = "Checking…";
 
       wallet.isInstalled().then((available) => {
         if (available) {
-          badge.textContent     = "Available";
+          badge.textContent = "Available";
           badge.style.background = "#ECFDF5";
-          badge.style.color      = "#059669";
-          btn.style.cursor       = "pointer";
+          badge.style.color = "#059669";
+          btn.style.cursor = "pointer";
         } else {
-          badge.textContent     = unavailText;
+          badge.textContent = unavailText;
           badge.style.background = "#FEF2F2";
-          badge.style.color      = "#DC2626";
-          btn.style.cursor       = "not-allowed";
-          btn.style.opacity      = "0.6";
+          badge.style.color = "#DC2626";
+          btn.style.cursor = "not-allowed";
+          btn.style.opacity = "0.6";
         }
       });
 
@@ -300,6 +320,7 @@ export class StellarWalletsKit {
             return;
           }
           this.destroyModal();
+          if (lastFocused) lastFocused.focus();
           try {
             await opts.onWalletSelected(wallet);
           } finally {
@@ -308,16 +329,46 @@ export class StellarWalletsKit {
         });
       });
 
+      focusableButtons.push(btn);
       list.appendChild(btn);
     });
 
     card.appendChild(header);
+    card.appendChild(descEl);
     card.appendChild(list);
     overlay.appendChild(card);
 
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) {
         this.destroyModal();
+        if (lastFocused) lastFocused.focus();
+        opts.onClosed?.();
+        resolve();
+      }
+    });
+
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const focusable = [closeBtn, ...focusableButtons].filter(
+        (el): el is HTMLElement => !!el && typeof el.focus === "function"
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    overlay.addEventListener("keydown", trapFocus);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        this.destroyModal();
+        if (lastFocused) lastFocused.focus();
         opts.onClosed?.();
         resolve();
       }
@@ -325,6 +376,9 @@ export class StellarWalletsKit {
 
     document.body.appendChild(overlay);
     this.modalContainer = overlay;
+
+    const focusTarget = focusableButtons[0] ?? closeBtn;
+    window.setTimeout(() => focusTarget.focus(), 0);
   }
 
   private destroyModal(): void {
