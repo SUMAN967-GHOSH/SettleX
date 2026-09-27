@@ -14,6 +14,7 @@ import {
 } from "@/lib/supabase/session";
 import { useWalletContext } from "./WalletContext";
 import { getWalletScopedKey, LS_PUBLIC_KEY, LS_USER } from "@/lib/utils/constants";
+import { parseUserRow } from "@/lib/supabase/rowGuards";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,14 +52,15 @@ AuthContext.displayName = "AuthContext";
 
 // ─── Helper: Convert DB row to User ───────────────────────────────────────────
 
-function dbRowToUser(row: any): User {
+function dbRowToUser(row: unknown): User {
+  const parsed = parseUserRow(row);
   return {
-    id: row.id,
-    walletAddress: row.wallet_address,
-    displayName: row.display_name,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    lastLoginAt: row.last_login_at,
+    id: parsed.id,
+    walletAddress: parsed.walletAddress,
+    displayName: parsed.displayName,
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
+    lastLoginAt: parsed.lastLoginAt,
   };
 }
 
