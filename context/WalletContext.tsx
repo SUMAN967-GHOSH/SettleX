@@ -274,7 +274,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsConnecting(false);
     }
-  }, [fetchBalance]);
+  }, [fetchBalance, toastError, toastSuccess]);
 
 
   const disconnect = useCallback(() => {
