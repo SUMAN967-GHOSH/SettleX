@@ -808,8 +808,15 @@ BEGIN
                 END IF;
 
                 IF COALESCE((v_new_share->>'paid')::boolean, false) = true THEN
-                    IF v_new_share->>'txHash' IS NULL OR trim(v_new_share->>'txHash') = '' THEN
+                    IF v_new_share->>'txHash' IS NULL OR NOT (v_new_share->>'txHash' ~ '^[0-9a-f]{64}$') THEN
                         RAISE EXCEPTION 'Valid transaction hash is required when marking share as paid';
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(NEW.shares) AS s
+                        WHERE s->>'memberId' != v_new_share->>'memberId'
+                        AND s->>'txHash' = v_new_share->>'txHash'
+                    ) THEN
+                        RAISE EXCEPTION 'Transaction hash already used on another share';
                     END IF;
                 END IF;
             END IF;
@@ -1012,7 +1019,7 @@ BEGIN
         RAISE EXCEPTION 'Not authenticated';
     END IF;
 
-    IF p_tx_hash IS NULL OR trim(p_tx_hash) = '' THEN
+    IF p_tx_hash IS NULL OR NOT (p_tx_hash ~ '^[0-9a-f]{64}$') THEN
         RAISE EXCEPTION 'Valid transaction hash is required to mark a share as paid';
     END IF;
 
@@ -1025,6 +1032,14 @@ BEGIN
 
     IF v_current_shares IS NULL THEN
         RAISE EXCEPTION 'Expense not found';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(v_current_shares) AS s
+        WHERE s->>'memberId' != p_member_id
+        AND s->>'txHash' = p_tx_hash
+    ) THEN
+        RAISE EXCEPTION 'Transaction hash already used on another share';
     END IF;
 
     -- Caller must be either the expense creator OR the owner of this share
