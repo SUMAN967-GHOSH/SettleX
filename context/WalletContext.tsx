@@ -19,6 +19,8 @@ import {
 import { clearWalletSession } from "@/lib/supabase/session";
 import type { WalletContextType } from "@/types/wallet";
 import { useToast } from "@/components/ui/Toast";
+import { reportError } from "@/lib/observability/logger";
+import { userFacingMessage } from "@/lib/errors/userMessage";
 
 
 const WalletContext = createContext<WalletContextType | null>(null);
@@ -256,17 +258,23 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       fetchBalance(resolvedAddress);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to connect wallet.";
+      // Matched against the raw text: the wallet extensions' own cancellation
+      // wording is what identifies a user backing out, and that is not shown.
       const isCancelled =
         msg.toLowerCase().includes("cancel") ||
         msg.toLowerCase().includes("closed without");
       if (!isCancelled) {
-        setError(msg);
-        toastError("Connection failed", msg);
+        // Vetted before display — a connect failure can surface extension
+        // internals or transport text.
+        const display = userFacingMessage(err).message;
+        reportError("wallet.connect_failed", err);
+        setError(display);
+        toastError("Connection failed", display);
       }
     } finally {
       setIsConnecting(false);
     }
-  }, [fetchBalance]);
+  }, [fetchBalance, toastError, toastSuccess]);
 
 
   const disconnect = useCallback(() => {

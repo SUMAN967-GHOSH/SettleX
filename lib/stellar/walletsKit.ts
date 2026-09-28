@@ -1,122 +1,23 @@
-import {
-  isConnected,
-  isAllowed,
-  requestAccess,
-  getAddress as freighterGetAddress,
-  signTransaction as freighterSignTransaction,
-  getNetwork,
-} from "@stellar/freighter-api";
+import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit/sdk";
+import { FREIGHTER_ID as KIT_FREIGHTER_ID } from "@creit.tech/stellar-wallets-kit/modules/freighter";
+import { defaultModules } from "@creit.tech/stellar-wallets-kit/modules/utils";
+import { Networks } from "@creit.tech/stellar-wallets-kit/types";
 import { STELLAR_NETWORK } from "@/lib/utils/constants";
 
-// ─── Wallet IDs ───────────────────────────────────────────────────────────────
+export const FREIGHTER_ID = KIT_FREIGHTER_ID;
+export type WalletId = string;
 
-export const FREIGHTER_ID = "freighter" as const;
-export const XBULL_ID     = "xbull"     as const;
-export const LOBSTR_ID    = "lobstr"    as const;
-export const RABET_ID     = "rabet"     as const;
-
-export type WalletId =
-  | typeof FREIGHTER_ID
-  | typeof XBULL_ID
-  | typeof LOBSTR_ID
-  | typeof RABET_ID;
-
-// ─── Network enum ─────────────────────────────────────────────────────────────
-
-export enum WalletNetwork {
-  PUBLIC  = "Public Global Stellar Network ; September 2015",
-  TESTNET = "Test SDF Network ; September 2015",
-}
-
-// ─── Wallet descriptor ────────────────────────────────────────────────────────
-
-export interface SupportedWallet {
-  id: WalletId;
-  name: string;
-  logoUrl: string;
-  installUrl: string;
-  isInstalled: () => Promise<boolean>;
-}
-
-const SUPPORTED_WALLETS: SupportedWallet[] = [
-  {
-    id: FREIGHTER_ID,
-    name:       "Freighter",
-    logoUrl:    "https://raw.githubusercontent.com/stellar/freighter/main/assets/images/freighter_logo.svg",
-    installUrl: "https://www.freighter.app/",
-    isInstalled: async () => {
-      if (typeof window === "undefined") return false;
-      try {
-        const result = await isConnected();
-        return !result.error && (result.isConnected ?? false);
-      } catch {
-        return false;
-      }
-    },
-  },
-  {
-    id: XBULL_ID,
-    name:       "xBull",
-    logoUrl:    "https://xbull.app/assets/logos/xbull-logo.svg",
-    installUrl: "https://xbull.app/",
-    isInstalled: async () => {
-      if (typeof window === "undefined") return false;
-      return typeof (window as unknown as Record<string, unknown>).xBulls === "object" &&
-             (window as unknown as Record<string, unknown>).xBulls !== null;
-    },
-  },
-  {
-    id: LOBSTR_ID,
-    name:       "Lobstr",
-    logoUrl:    "https://lobstr.co/static/img/lobstr-logo.svg",
-    installUrl: "https://lobstr.co/",
-    isInstalled: async () => {
-      if (typeof window === "undefined") return false;
-      return typeof (window as unknown as Record<string, unknown>).lobstr === "object" &&
-             (window as unknown as Record<string, unknown>).lobstr !== null;
-    },
-  },
-  {
-    id: RABET_ID,
-    name:       "Rabet",
-    logoUrl:    "https://rabet.io/static/images/logo.svg",
-    installUrl: "https://rabet.io/",
-    isInstalled: async () => {
-      if (typeof window === "undefined") return false;
-      return typeof (window as unknown as Record<string, unknown>).rabet === "object" &&
-             (window as unknown as Record<string, unknown>).rabet !== null;
-    },
-  },
-];
-
-// ─── Kit options ──────────────────────────────────────────────────────────────
-
-export interface StellarWalletsKitOptions {
-  network: WalletNetwork;
-  selectedWalletId?: WalletId;
-}
-
-export interface WalletModalOptions {
-  onWalletSelected: (wallet: SupportedWallet) => Promise<void> | void;
+interface WalletModalOptions {
+  onWalletSelected: (wallet: { id: WalletId }) => Promise<void> | void;
   onClosed?: () => void;
   modalTitle?: string;
   notAvailableText?: string;
 }
 
-export interface SignTransactionOptions {
-  address: string;
-  networkPassphrase?: string;
-}
+let initialized = false;
 
-export interface GetAddressResult {
-  address: string;
-}
-
-export interface SignTransactionResult {
-  signedTxXdr: string;
-}
-
-// ─── Kit class ────────────────────────────────────────────────────────────────
+function initializeKit(): void {
+  if (initialized) return;
 
 export class StellarWalletsKit {
   private readonly network: WalletNetwork;
@@ -129,8 +30,16 @@ export class StellarWalletsKit {
     this.selectedWalletId = opts.selectedWalletId ?? FREIGHTER_ID;
   }
 
-  // ── Wallet selection ────────────────────────────────────────────────────────
+  initialized = true;
+}
 
+/**
+ * Thin compatibility layer around the maintained Stellar Wallets Kit.
+ * Keeping this small surface avoids coupling the rest of the app to the kit's
+ * static API while leaving wallet detection, modal behavior, and signing to
+ * the upstream library.
+ */
+const walletsKit = {
   setWallet(id: WalletId): void {
     this.selectedWalletId = id;
   }
@@ -386,6 +295,8 @@ export class StellarWalletsKit {
   }
 
   private destroyModal(): void {
+    this.modalCleanup?.();
+    this.modalCleanup = null;
     if (this.modalContainer && document.body.contains(this.modalContainer)) {
       document.body.removeChild(this.modalContainer);
     }
@@ -396,186 +307,39 @@ export class StellarWalletsKit {
 
   // ── Address ─────────────────────────────────────────────────────────────────
 
-  async getAddress(): Promise<GetAddressResult> {
-    if (this.selectedWalletId === FREIGHTER_ID) return this.freighterGetAddress();
-    if (this.selectedWalletId === XBULL_ID)     return this.xBullGetAddress();
-    if (this.selectedWalletId === LOBSTR_ID)    return this.lobstrGetAddress();
-    if (this.selectedWalletId === RABET_ID)     return this.rabetGetAddress();
-    throw new Error(`Wallet "${this.selectedWalletId}" is not supported.`);
-  }
+  getAddress(): Promise<{ address: string }> {
+    return StellarWalletsKit.getAddress();
+  },
 
-  /**
-   * Reads the currently selected account **without prompting**.
-   *
-   * Returns `null` when the answer would require user interaction (the site was
-   * never authorised, the extension is locked or missing) — callers use this to
-   * reconcile a restored session against the live wallet, and a popup on every
-   * page load would be unacceptable there.
-   *
-   * A `null` result means "unknown", never "mismatch": callers must not treat it
-   * as proof the saved address is still valid.
-   */
   async getAddressSilently(): Promise<string | null> {
-    if (typeof window === "undefined") return null;
     try {
-      if (this.selectedWalletId === FREIGHTER_ID) {
-        // isAllowed() is the only Freighter call that never opens a popup.
-        const allowed = await isAllowed();
-        if (allowed.error || !allowed.isAllowed) return null;
-        const result = await freighterGetAddress();
-        if (result.error || !result.address) return null;
-        return result.address;
-      }
-
-      // The remaining extensions expose no "already authorised" probe, and
-      // their address calls can prompt. Read only what they publish eagerly.
-      const injected = (window as unknown as Record<string, unknown>)[
-        this.selectedWalletId === XBULL_ID
-          ? "xBulls"
-          : this.selectedWalletId === LOBSTR_ID
-            ? "lobstr"
-            : "rabet"
-      ] as { publicKey?: unknown; address?: unknown } | undefined;
-
-      if (!injected) return null;
-      const address = injected.publicKey ?? injected.address;
-      return typeof address === "string" && address ? address : null;
+      const { address } = await StellarWalletsKit.selectedModule.getAddress({
+        skipRequestAccess: true,
+      });
+      return address || null;
     } catch {
       return null;
     }
-  }
+  },
 
-  private async rabetGetAddress(): Promise<GetAddressResult> {
-    const rabet = (window as unknown as Record<string, unknown>).rabet as
-      | { connect: () => Promise<{ publicKey?: string }> }
-      | undefined;
-    if (!rabet) throw new Error("Rabet extension is not installed.");
-    const result = await rabet.connect();
-    if (!result.publicKey) throw new Error("Rabet did not return a public key.");
-    return { address: result.publicKey };
-  }
-
-  private async freighterGetAddress(): Promise<GetAddressResult> {
-    const allowed = await isAllowed();
-    if (!allowed.error && allowed.isAllowed) {
-      const result = await freighterGetAddress();
-      if (!result.error && result.address) return { address: result.address };
-    }
-    const result = await requestAccess();
-    if (result.error) {
-      const msg = String(result.error);
-      if (/reject|denied/i.test(msg)) throw new Error("Connection rejected in Freighter.");
-      throw new Error(msg || "Freighter access denied.");
-    }
-    if (!result.address) throw new Error("Freighter did not return an address.");
-    return { address: result.address };
-  }
-
-  private async xBullGetAddress(): Promise<GetAddressResult> {
-    const xbull = (window as unknown as Record<string, unknown>).xBulls as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    if (!xbull) throw new Error("xBull extension is not installed.");
-    const result = (await xbull.getPublicKey()) as { publicKey?: string };
-    if (!result.publicKey) throw new Error("xBull did not return a public key.");
-    return { address: result.publicKey };
-  }
-
-  private async lobstrGetAddress(): Promise<GetAddressResult> {
-    const lobstr = (window as unknown as Record<string, unknown>).lobstr as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    if (!lobstr) throw new Error("Lobstr extension is not installed.");
-    const result = (await lobstr.getPublicKey()) as { publicKey?: string };
-    if (!result.publicKey) throw new Error("Lobstr did not return a public key.");
-    return { address: result.publicKey };
-  }
-
-  // ── Sign transaction ────────────────────────────────────────────────────────
-
-  async signTransaction(xdr: string, opts: SignTransactionOptions): Promise<SignTransactionResult> {
-    if (this.selectedWalletId === FREIGHTER_ID) return this.freighterSign(xdr, opts);
-    if (this.selectedWalletId === XBULL_ID)     return this.xBullSign(xdr, opts);
-    if (this.selectedWalletId === LOBSTR_ID)    return this.lobstrSign(xdr, opts);
-    if (this.selectedWalletId === RABET_ID)     return this.rabetSign(xdr, opts);
-    throw new Error(`Wallet "${this.selectedWalletId}" does not support signing.`);
-  }
-
-  private async rabetSign(xdr: string, opts: SignTransactionOptions): Promise<SignTransactionResult> {
-    const rabet = (window as unknown as Record<string, unknown>).rabet as
-      | { sign: (xdr: string, network: "testnet" | "mainnet") => Promise<{ xdr?: string }> }
-      | undefined;
-    if (!rabet) throw new Error("Rabet extension is not installed.");
-    const passphrase = opts.networkPassphrase ?? this.network;
-    const network = passphrase === WalletNetwork.PUBLIC ? "mainnet" : "testnet";
-    const result = await rabet.sign(xdr, network);
-    if (!result.xdr) throw new Error("Rabet did not return a signed transaction.");
-    return { signedTxXdr: result.xdr };
-  }
-
-  private async freighterSign(xdr: string, opts: SignTransactionOptions): Promise<SignTransactionResult> {
-    const passphrase = opts.networkPassphrase ?? this.network;
-    const result = await freighterSignTransaction(xdr, { networkPassphrase: passphrase });
-    if ("error" in result && result.error) {
-      const msg = String(result.error);
-      if (/reject|denied|cancel|declined/i.test(msg)) throw new Error("Transaction cancelled in Freighter.");
-      throw new Error(msg || "Freighter signing failed.");
-    }
-    const signedTxXdr = (result as { signedTxXdr: string }).signedTxXdr;
-    if (!signedTxXdr) throw new Error("Freighter returned an empty signed transaction.");
-    return { signedTxXdr };
-  }
-
-  private async xBullSign(xdr: string, opts: SignTransactionOptions): Promise<SignTransactionResult> {
-    const xbull = (window as unknown as Record<string, unknown>).xBulls as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    if (!xbull) throw new Error("xBull extension is not installed.");
-    const passphrase = opts.networkPassphrase ?? this.network;
-    const result = (await xbull.signXDR(xdr, { network: passphrase })) as { signedXDR?: string };
-    if (!result.signedXDR) throw new Error("xBull did not return a signed transaction.");
-    return { signedTxXdr: result.signedXDR };
-  }
-
-  private async lobstrSign(xdr: string, opts: SignTransactionOptions): Promise<SignTransactionResult> {
-    const lobstr = (window as unknown as Record<string, unknown>).lobstr as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    if (!lobstr) throw new Error("Lobstr extension is not installed.");
-    const passphrase = opts.networkPassphrase ?? this.network;
-    const result = (await lobstr.signTransaction(xdr, { network: passphrase })) as { signedXDR?: string };
-    if (!result.signedXDR) throw new Error("Lobstr did not return a signed transaction.");
-    return { signedTxXdr: result.signedXDR };
-  }
-
-  // ── Network ─────────────────────────────────────────────────────────────────
+  signTransaction(
+    xdr: string,
+    options: { address: string; networkPassphrase?: string }
+  ): Promise<{ signedTxXdr: string; signerAddress?: string }> {
+    return StellarWalletsKit.signTransaction(xdr, options);
+  },
 
   async getNetworkFromWallet(): Promise<string> {
-    if (this.selectedWalletId === FREIGHTER_ID) {
-      try {
-        const result = await getNetwork();
-        if ("error" in result && result.error) return STELLAR_NETWORK;
-        return (result as { network: string }).network ?? STELLAR_NETWORK;
-      } catch {
-        return STELLAR_NETWORK;
-      }
-    }
-    return STELLAR_NETWORK;
-  }
+    const { network } = await StellarWalletsKit.getNetwork();
+    return network;
+  },
+};
 
-  static getSupportedWallets(): SupportedWallet[] {
-    return SUPPORTED_WALLETS;
-  }
-}
-
-// ─── SSR-safe singleton ───────────────────────────────────────────────────────
-
-let _instance: StellarWalletsKit | null = null;
-
-export function getWalletsKit(): StellarWalletsKit {
+export function getWalletsKit(): typeof walletsKit {
   if (typeof window === "undefined") {
     throw new Error("StellarWalletsKit requires a browser environment.");
   }
-  if (!_instance) {
-    _instance = new StellarWalletsKit({
-      network:
-        STELLAR_NETWORK === "PUBLIC"
-          ? WalletNetwork.PUBLIC
-          : WalletNetwork.TESTNET,
-      selectedWalletId: FREIGHTER_ID,
-    });
-  }
-  return _instance;
+
+  initializeKit();
+  return walletsKit;
 }
