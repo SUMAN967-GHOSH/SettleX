@@ -140,7 +140,9 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
       })
       .catch((err) => {
         if (cancelled) return;
-        console.warn("Wallet sign-in failed — falling back to cached data:", err);
+        logWarn("trip.signin_failed_using_cache", {
+          fields: { ...supabaseErrorFields(err), error: err instanceof Error ? err.message : String(err) },
+        });
         setClient(null);
       });
 
@@ -191,7 +193,7 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
           localStorage.setItem(cacheKey, JSON.stringify(trips));
         }
       } catch (err) {
-        console.warn("Failed to load trips from Supabase, using localStorage:", err);
+        logWarn("trip.load_failed_using_cache", { fields: supabaseErrorFields(err) });
         try {
           const raw = localStorage.getItem(cacheKey);
           if (raw && isMounted) {
@@ -272,7 +274,7 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
       )
       .subscribe((status, err) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-          console.error("Trips realtime subscription failed", { status, err });
+          reportError("trip.realtime_failed", err, { fields: { status } });
         }
       });
 
@@ -348,7 +350,9 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
 
         if (error) throw error;
       } catch (err) {
-        console.error("Failed to update trip in Supabase:", err);
+        reportError("trip.update_failed", err, {
+          fields: { tripId: id, ...supabaseErrorFields(err) },
+        });
         // Roll back optimistic update on error
         setTrips((prev) => {
           const rolled = prev.map((t) => (t.id === id ? current : t));
@@ -381,7 +385,9 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
 
         if (error) throw error;
       } catch (err) {
-        console.error("Failed to delete trip from Supabase:", err);
+        reportError("trip.delete_failed", err, {
+          fields: { tripId: id, ...supabaseErrorFields(err) },
+        });
         // Roll back optimistic deletion on error
         setTrips((prev) => {
           if (prev.some((t) => t.id === id)) return prev;
@@ -421,7 +427,9 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
 
         if (error) throw error;
       } catch (err) {
-        console.error("Failed to add expense to trip in Supabase:", err);
+        reportError("trip.add_expense_failed", err, {
+          fields: { tripId, ...supabaseErrorFields(err) },
+        });
         // Roll back optimistic update on error
         setTrips((prev) => {
           const rolled = prev.map((t) => (t.id === tripId ? current : t));
@@ -457,7 +465,9 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
 
         if (error) throw error;
       } catch (err) {
-        console.error("Failed to settle trip in Supabase:", err);
+        reportError("trip.settle_failed", err, {
+          fields: { tripId: id, ...supabaseErrorFields(err) },
+        });
         // Roll back optimistic update on error
         setTrips((prev) => {
           const rolled = prev.map((t) => (t.id === id ? current : t));

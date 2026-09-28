@@ -18,6 +18,7 @@ import { NETWORK_PASSPHRASE } from "@/lib/utils/constants";
 import { PayButton } from "@/components/payment/PayButton";
 import { TransactionHash } from "@/components/payment/TransactionHash";
 import { cn, formatXLM } from "@/lib/utils";
+import { userFacingMessage } from "@/lib/errors/userMessage";
 
 interface SettlementSummaryProps {
   trip: Trip;
@@ -155,7 +156,11 @@ function NetPaymentRow({
       const isRejected = /reject|denied|cancel/i.test(msg);
       toastError(
         isRejected ? "Transaction cancelled" : "Payment failed",
-        isRejected ? "You rejected the payment in Freighter." : msg,
+        // Vetted before display: a settlement failure can surface a raw PostgREST
+        // or RPC message, which must not be shown to the user verbatim.
+        isRejected
+          ? "You rejected the payment in Freighter."
+          : userFacingMessage(err).message,
       );
       setRowState({ status: "idle" });
     }

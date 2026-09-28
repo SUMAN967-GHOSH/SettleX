@@ -7,6 +7,7 @@ import { ToastProvider } from "@/components/ui/Toast";
 import { ExpenseProvider } from "@/context/ExpenseContext";
 import { TripProvider } from "@/context/TripContext";
 import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
+import { ObservabilityInit } from "@/components/observability/ObservabilityInit";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 
 const poppins = Poppins({
@@ -99,6 +100,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`scroll-smooth ${poppins.variable}`}>
       <body className="bg-[#F6F6F6] text-[#0F0F14] font-sans antialiased font-[family-name:var(--font-poppins)]">
+        {/* First in the tree: attaches error reporting before any provider
+            below it can throw. Renders nothing. */}
+        <ObservabilityInit />
         <ToastProvider>
           <WalletProvider>
             <AuthProvider>
