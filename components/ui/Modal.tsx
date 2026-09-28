@@ -41,19 +41,18 @@ export function Modal({
 }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
-  const openerRef = useRef<HTMLElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const wasOpenRef = useRef(false);
 
   const restoreFocus = () => {
-    if (openerRef.current && document.contains(openerRef.current)) {
-      openerRef.current.focus();
-    }
-    openerRef.current = null;
+    const target = returnFocusRef.current;
+    if (target && document.contains(target)) target.focus();
+    returnFocusRef.current = null;
   };
 
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      openerRef.current = document.activeElement as HTMLElement | null;
+      returnFocusRef.current = document.activeElement as HTMLElement | null;
     }
     wasOpenRef.current = open;
 
@@ -71,7 +70,11 @@ export function Modal({
     <Dialog.Root
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!nextOpen) onClose();
+        if (nextOpen) {
+          returnFocusRef.current = document.activeElement as HTMLElement | null;
+        } else {
+          onClose();
+        }
       }}
     >
       <Dialog.Portal>
@@ -149,7 +152,9 @@ export function Modal({
                     </div>
                   )}
 
-                  {!title && <Dialog.Title className="sr-only">Dialog</Dialog.Title>}
+                  {!title && (
+                    <Dialog.Title className="sr-only">Dialog</Dialog.Title>
+                  )}
 
                   {!title && !description && (
                     <Dialog.Close asChild>

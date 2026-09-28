@@ -300,7 +300,12 @@ const walletsKit = {
     if (this.modalContainer && document.body.contains(this.modalContainer)) {
       document.body.removeChild(this.modalContainer);
     }
-  },
+    this.modalContainer = null;
+    this.modalCleanup?.();
+    this.modalCleanup = null;
+  }
+
+  // ── Address ─────────────────────────────────────────────────────────────────
 
   getAddress(): Promise<{ address: string }> {
     return StellarWalletsKit.getAddress();
