@@ -23,6 +23,10 @@ export async function register() {
   const { assertAuthConfig } = await import("@/lib/auth/serverConfig");
   const { reportError } = await import("@/lib/observability/logger");
 
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn("WARNING: SUPABASE_SERVICE_ROLE_KEY is not set. Security controls are degraded: replay protection, rate limiting, and token revocation are inactive.");
+  }
+
   try {
     assertAuthConfig();
   } catch (err) {

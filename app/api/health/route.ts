@@ -23,16 +23,29 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const report = checkConfig();
 
+  const isOnlyServiceRoleMissing = 
+    !report.ok &&
+    report.problems.length === 1 && 
+    report.problems[0].name === "SUPABASE_SERVICE_ROLE_KEY";
+    
+  const status = report.ok ? "ok" : isOnlyServiceRoleMissing ? "degraded" : "misconfigured";
+  const statusCode = report.ok || isOnlyServiceRoleMissing ? 200 : 503;
+
   return NextResponse.json(
     {
-      status: report.ok ? "ok" : "misconfigured",
+      status,
       // Names only — see the note above on why no values appear here.
       missingRequired: report.problems.map((problem) => problem.name),
       missingRecommended: report.warnings.map((problem) => problem.name),
+      inactiveControls: isOnlyServiceRoleMissing ? [
+        "cross-instance nonce replay protection",
+        "cross-instance rate limiting",
+        "token revocation"
+      ] : undefined,
       checkedAt: new Date().toISOString(),
     },
     {
-      status: report.ok ? 200 : 503,
+      status: statusCode,
       headers: { "Cache-Control": "no-store" },
     },
   );
