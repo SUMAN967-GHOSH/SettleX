@@ -66,6 +66,12 @@ jobs:
             console.log('Passed Supabase DB function search_path lint.');
           "
 
+      - name: Validate Supabase SQL Syntax
+        run: |
+          docker run --name pg-lint -e POSTGRES_PASSWORD=postgres -d postgres
+          sleep 5
+          docker exec -i pg-lint psql -U postgres -v ON_ERROR_STOP=1 -f - < supabase-setup.sql
+
       - name: Test with coverage gate
         run: npm run test:coverage -- --runInBand
 
