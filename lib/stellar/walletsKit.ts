@@ -122,6 +122,7 @@ export class StellarWalletsKit {
   private readonly network: WalletNetwork;
   private selectedWalletId: WalletId;
   private modalContainer: HTMLElement | null = null;
+  private modalCleanup: (() => void) | null = null;
 
   constructor(opts: StellarWalletsKitOptions) {
     this.network         = opts.network;
@@ -156,6 +157,7 @@ export class StellarWalletsKit {
     const title = opts.modalTitle ?? "Connect Wallet";
     const unavailText = opts.notAvailableText ?? "Not installed";
     const lastFocused = document.activeElement as HTMLElement | null;
+    let settled = false;
 
     const overlay = document.createElement("div");
     overlay.setAttribute("data-settlex-wallet-modal", "true");
@@ -223,12 +225,16 @@ export class StellarWalletsKit {
       padding: "4px",
       lineHeight: "1",
     } as Partial<CSSStyleDeclaration>);
-    closeBtn.addEventListener("click", () => {
+    const finish = (notifyClosed: boolean) => {
+      if (settled) return;
+      settled = true;
       this.destroyModal();
-      if (lastFocused) lastFocused.focus();
-      opts.onClosed?.();
+      if (lastFocused && document.contains(lastFocused)) lastFocused.focus();
+      if (notifyClosed) opts.onClosed?.();
       resolve();
-    });
+    };
+
+    closeBtn.addEventListener("click", () => finish(true));
 
     header.appendChild(titleEl);
     header.appendChild(closeBtn);
@@ -319,8 +325,7 @@ export class StellarWalletsKit {
             window.open(wallet.installUrl, "_blank", "noopener,noreferrer");
             return;
           }
-          this.destroyModal();
-          if (lastFocused) lastFocused.focus();
+          finish(false);
           try {
             await opts.onWalletSelected(wallet);
           } finally {
@@ -340,10 +345,7 @@ export class StellarWalletsKit {
 
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) {
-        this.destroyModal();
-        if (lastFocused) lastFocused.focus();
-        opts.onClosed?.();
-        resolve();
+        finish(true);
       }
     });
 
@@ -365,14 +367,16 @@ export class StellarWalletsKit {
     };
 
     overlay.addEventListener("keydown", trapFocus);
-    document.addEventListener("keydown", (event) => {
+    const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        this.destroyModal();
-        if (lastFocused) lastFocused.focus();
-        opts.onClosed?.();
-        resolve();
+        finish(true);
       }
-    });
+    };
+    document.addEventListener("keydown", handleEscape);
+    this.modalCleanup = () => {
+      overlay.removeEventListener("keydown", trapFocus);
+      document.removeEventListener("keydown", handleEscape);
+    };
 
     document.body.appendChild(overlay);
     this.modalContainer = overlay;
@@ -382,6 +386,8 @@ export class StellarWalletsKit {
   }
 
   private destroyModal(): void {
+    this.modalCleanup?.();
+    this.modalCleanup = null;
     if (this.modalContainer && document.body.contains(this.modalContainer)) {
       document.body.removeChild(this.modalContainer);
     }
