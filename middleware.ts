@@ -33,12 +33,7 @@ export function middleware(request: NextRequest) {
     "https://api.stellar.expert",
     "https://*.supabase.co",
     "wss://*.supabase.co",
-    "https://*.walletconnect.com",
-    "https://*.walletconnect.org",
-    "wss://*.walletconnect.com",
-    "wss://*.walletconnect.org",
-    "https://*.reown.com",
-    "wss://*.reown.com",
+
     // Dev-only: Next.js HMR websocket + fast-refresh polling.
     ...(isDev ? ["ws://localhost:*", "http://localhost:*"] : []),
   ].join(" ");
@@ -54,8 +49,7 @@ export function middleware(request: NextRequest) {
     `img-src 'self' blob: data: https:`,
     `font-src 'self'`,
     `connect-src ${connectSrc}`,
-    // WalletConnect verification runs in an iframe; wallet QR/deeplink modals too.
-    `frame-src 'self' https://verify.walletconnect.com https://verify.walletconnect.org https://*.walletconnect.org`,
+
     `worker-src 'self' blob:`,
     `manifest-src 'self'`,
     `object-src 'none'`,
