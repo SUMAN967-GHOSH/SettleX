@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useId } from "react";
+import React, { useEffect, useId, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { X } from "lucide-react";
@@ -41,8 +41,22 @@ export function Modal({
 }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const openerRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+
+  const restoreFocus = () => {
+    if (openerRef.current && document.contains(openerRef.current)) {
+      openerRef.current.focus();
+    }
+    openerRef.current = null;
+  };
 
   useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      openerRef.current = document.activeElement as HTMLElement | null;
+    }
+    wasOpenRef.current = open;
+
     if (open) {
       document.body.style.overflow = "hidden";
     } else {
@@ -92,10 +106,10 @@ export function Modal({
                     className
                   )}
                   onClick={(e) => e.stopPropagation()}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby={title ? titleId : undefined}
-                  aria-describedby={description ? descriptionId : undefined}
+                  onCloseAutoFocus={(event) => {
+                    event.preventDefault();
+                    restoreFocus();
+                  }}
                   onEscapeKeyDown={(event) => {
                     event.preventDefault();
                     onClose();
@@ -109,14 +123,18 @@ export function Modal({
                     <div className="flex items-start justify-between gap-4 px-5 sm:px-6 pt-4 sm:pt-6 pb-0 shrink-0">
                       <div>
                         {title && (
-                          <h2 id={titleId} className="text-base font-bold text-[#0F0F14]">
-                            {title}
-                          </h2>
+                          <Dialog.Title asChild>
+                            <h2 id={titleId} className="text-base font-bold text-[#0F0F14]">
+                              {title}
+                            </h2>
+                          </Dialog.Title>
                         )}
                         {description && (
-                          <p id={descriptionId} className="mt-1 text-sm text-[#888]">
-                            {description}
-                          </p>
+                          <Dialog.Description asChild>
+                            <p id={descriptionId} className="mt-1 text-sm text-[#888]">
+                              {description}
+                            </p>
+                          </Dialog.Description>
                         )}
                       </div>
                       <Dialog.Close asChild>
@@ -130,6 +148,8 @@ export function Modal({
                       </Dialog.Close>
                     </div>
                   )}
+
+                  {!title && <Dialog.Title className="sr-only">Dialog</Dialog.Title>}
 
                   {!title && !description && (
                     <Dialog.Close asChild>
