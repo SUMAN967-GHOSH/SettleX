@@ -25,19 +25,7 @@ The selected wallet ID is stored under `settlex:walletId`. On reload, SettleX
 selects that module before reconciling the saved account, ensuring subsequent
 signing requests go back to the wallet the user connected.
 
-## Adding WalletConnect
 
-WalletConnect requires Reown project metadata, so it is not included in
-`defaultModules()`. To enable it:
-
-1. Create a project at <https://dashboard.reown.com>.
-2. Add the project ID and application metadata to environment variables.
-3. Instantiate `WalletConnectModule` from
-   `@creit.tech/stellar-wallets-kit/modules/wallet-connect` and append it to
-   the modules passed to `StellarWalletsKit.init()`.
-
-Keep secrets server-side; only the public Reown project ID belongs in a
-`NEXT_PUBLIC_` variable.
 
 ## Passkey smart wallets
 
