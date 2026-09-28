@@ -66,8 +66,7 @@ export function middleware(request: NextRequest) {
     `img-src 'self' blob: data: https:`,
     `font-src 'self'`,
     `connect-src ${connectSrc}`,
-    // WalletConnect verification runs in an iframe; wallet QR/deeplink modals too.
-    `frame-src 'self' https://verify.walletconnect.com https://verify.walletconnect.org https://*.walletconnect.org`,
+
     `worker-src 'self' blob:`,
     `manifest-src 'self'`,
     `object-src 'none'`,
