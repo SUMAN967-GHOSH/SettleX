@@ -12,6 +12,12 @@
 import { LS_SESSION, SESSION_REFRESH_SKEW_SECONDS, WALLET_CLAIM } from "@/lib/auth/constants";
 import { readStoredSession } from "@/lib/supabase/session";
 
+// session.ts imports the signer, which loads the ESM-only wallet kit. Nothing
+// here signs, so stub it as the other session tests do.
+jest.mock("@/lib/freighter", () => ({
+  signXDR: jest.fn(),
+}));
+
 const VICTIM = "GDQNY3PBOJOKYZSRMK2S7LHHGWZIUISD4QORETLMXEWXBI7KFZZMKTL3";
 const ATTACKER = "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ";
 
