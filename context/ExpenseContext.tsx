@@ -22,6 +22,7 @@ import type {
 import { useWalletContext } from "./WalletContext";
 import { logWarn, reportError } from "@/lib/observability/logger";
 import { supabaseErrorFields } from "@/lib/observability/supabaseError";
+import { parseExpenseRow } from "@/lib/supabase/rowGuards";
 
 
 /**
@@ -295,7 +296,8 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         "postgres_changes",
         { event: "DELETE", schema: "public", table: "expenses" },
         (payload: RealtimePostgresChangesPayload<any>) => {
-          const row = payload.old;
+          // `old` is typed `{}` for INSERT events; a DELETE carries the row.
+          const row = payload.old as { id?: string } | undefined;
           if (!row || !isRowForWallet(row, publicKey)) return;
           const deletedId = row?.id;
           if (!deletedId) return;
