@@ -283,7 +283,8 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
         "postgres_changes",
         { event: "DELETE", schema: "public", table: "trips" },
         (payload: RealtimePostgresChangesPayload<any>) => {
-          const row = payload.old;
+          // `old` is typed `{}` for INSERT events; a DELETE carries the row.
+          const row = payload.old as { id?: string } | undefined;
           if (!row || !isRowForWallet(row, publicKey)) return;
           const deletedId = row?.id;
           if (!deletedId) return;
