@@ -17,6 +17,8 @@ import { getWalletScopedKey, LS_PUBLIC_KEY, LS_USER } from "@/lib/utils/constant
 import { parseUserRow } from "@/lib/supabase/rowGuards";
 import { useToast } from "@/components/ui/Toast";
 import { reportError } from "@/lib/observability/logger";
+import { supabaseErrorFields } from "@/lib/observability/supabaseError";
+import { userFacingMessage } from "@/lib/errors/userMessage";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
