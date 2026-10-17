@@ -40,8 +40,10 @@ SettleX uses:
   RLS policy reads it through `public.settlex_wallet()`; requests without a
   valid token match no rows.
 - Sessions are cached in `localStorage` and last 1 hour by default
-  (`AUTH_SESSION_TTL_SECONDS`, capped at 12 hours). They re-sign silently before
-  expiry, so the short lifetime is invisible in normal use.
+  (`AUTH_SESSION_TTL_SECONDS`, capped at 12 hours). Renewing a session requires
+  wallet confirmation (SEP-10 challenge signing); the UI displays a visible
+  prompt before expiry so users can re-sign and rebind realtime connections
+  without losing incoming live updates.
 - Every token carries a `jti`. Signing out writes that id to
   `public.revoked_tokens`, and `settlex_wallet()` — the one function every RLS
   policy resolves identity through — returns NULL for a revoked token, so it

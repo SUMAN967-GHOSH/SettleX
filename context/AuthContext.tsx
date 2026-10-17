@@ -10,6 +10,8 @@ import React, {
 import {
   clearWalletSession,
   getAuthenticatedClient,
+  getSessionExpiryInfo,
+  onSessionChange,
   requireAuthenticatedClient,
 } from "@/lib/supabase/session";
 import { useWalletContext } from "./WalletContext";
@@ -41,6 +43,16 @@ interface AuthContextType {
    * so the UI should ask the user to re-authenticate rather than carry on.
    */
   sessionError: string | null;
+  /** Whether the session is inside the expiry warning window or has expired. */
+  isSessionExpiring: boolean;
+  /** Whether the session has passed its expiration time. */
+  isSessionExpired: boolean;
+  /** Seconds until the session expires, or 0 if expired, or null if unauthenticated. */
+  sessionSecondsRemaining: number | null;
+  /** True while the user is confirming a re-auth signature prompt. */
+  isSigningToContinue: boolean;
+  /** Prompts the wallet to sign and re-authenticate an expiring or expired session. */
+  signToContinue: () => Promise<void>;
   signUp: (displayName: string) => Promise<void>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -129,6 +141,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Set only after the wallet has signed a server-issued challenge and the
   // server has minted a token for this exact address.
   const [verifiedWallet, setVerifiedWallet] = useState<string | null>(null);
+  const [isSessionExpiring, setIsSessionExpiring] = useState(false);
+  const [isSessionExpired, setIsSessionExpired] = useState(false);
+  const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState<number | null>(null);
+  const [isSigningToContinue, setIsSigningToContinue] = useState(false);
   const { publicKey, isConnected, isHydrated } = useWalletContext();
 
   // Authorization rests on the verified token, never on cached state. Writing
@@ -211,6 +227,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     loadUser(publicKey);
   }, [publicKey, isHydrated, sessionNonce]);
+
+  // ── Monitor session expiry for proactive warning and prompt ───────────────
+
+  useEffect(() => {
+    if (!publicKey || !verifiedWallet || verifiedWallet !== publicKey) {
+      setIsSessionExpiring(false);
+      setIsSessionExpired(false);
+      setSessionSecondsRemaining(null);
+      return;
+    }
+
+    const checkExpiry = () => {
+      const info = getSessionExpiryInfo(publicKey);
+      if (!info) {
+        setIsSessionExpiring(false);
+        setIsSessionExpired(false);
+        setSessionSecondsRemaining(null);
+        return;
+      }
+
+      setSessionSecondsRemaining(info.secondsRemaining);
+      setIsSessionExpired(info.isExpired);
+      setIsSessionExpiring(info.isExpiringSoon || info.isExpired);
+    };
+
+    checkExpiry();
+    const interval = setInterval(checkExpiry, 5000);
+    const unsubscribe = onSessionChange(checkExpiry);
+
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
+  }, [publicKey, verifiedWallet]);
 
   // ── Sign up: Create new user profile ──────────────────────────────────────
 
@@ -339,6 +389,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearUserCache(publicKey);
     setVerifiedWallet(null);
     setSessionError(null);
+    setIsSessionExpiring(false);
+    setIsSessionExpired(false);
+    setSessionSecondsRemaining(null);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(LS_USER);
     }
@@ -364,6 +417,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     setSessionNonce((n) => n + 1);
   }, []);
+
+  // ── Sign to continue: re-authenticate session with wallet prompt ──────────
+
+  const signToContinue = useCallback(async () => {
+    if (!publicKey) return;
+    try {
+      setIsSigningToContinue(true);
+      await getAuthenticatedClient(publicKey, { interactive: true, forceRefresh: true });
+      setVerifiedWallet(publicKey);
+      setSessionError(null);
+    } catch (err: unknown) {
+      reportError("auth.reauth_failed", err);
+      const msg = userFacingMessage(err).message;
+      setSessionError(msg);
+      toastError("Session Renewal Failed", msg);
+    } finally {
+      setIsSigningToContinue(false);
+    }
+  }, [publicKey, toastError]);
 
   // ── Update profile ─────────────────────────────────────────────────────────
 
@@ -441,6 +513,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoading,
     isAuthenticated,
     sessionError,
+    isSessionExpiring,
+    isSessionExpired,
+    sessionSecondsRemaining,
+    isSigningToContinue,
+    signToContinue,
     signUp,
     signIn,
     signOut,

@@ -10,6 +10,7 @@ import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
 import { ObservabilityInit } from "@/components/observability/ObservabilityInit";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 import { NetworkGuardBanner } from "@/components/wallet/NetworkGuardBanner";
+import { SessionExpiryBanner } from "@/components/auth/SessionExpiryBanner";
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -108,6 +109,7 @@ export default function RootLayout({
           <WalletProvider>
             <NetworkGuardBanner />
             <AuthProvider>
+              <SessionExpiryBanner />
               <ExpenseProvider>
                 <TripProvider>
                   {children}
