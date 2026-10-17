@@ -223,6 +223,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error("Display name is required");
       }
 
+      if (displayName.trim().length > 50) {
+        throw new Error("Display name cannot exceed 50 characters");
+      }
+
       try {
         const client = await requireAuthenticatedClient(publicKey);
         setVerifiedWallet(publicKey);
@@ -240,6 +244,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (error) {
           if (error.code === '23505') {
             throw new Error("This wallet is already registered. Please sign in instead.");
+          } else if (error.code === '23514') {
+            throw new Error("Display name must be between 1 and 50 characters.");
           } else if (error.message.includes('permission denied') || error.message.includes('policy')) {
             throw new Error("Access denied. Please make sure your database is properly configured.");
           } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
@@ -360,6 +366,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (updates: Partial<Pick<User, "displayName">>) => {
       if (!publicKey || !user) {
         throw new Error("Not authenticated");
+      }
+
+      if (updates.displayName !== undefined) {
+        if (!updates.displayName.trim()) {
+          throw new Error("Display name is required");
+        }
+        if (updates.displayName.trim().length > 50) {
+          throw new Error("Display name cannot exceed 50 characters");
+        }
       }
 
       try {
