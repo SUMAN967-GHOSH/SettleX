@@ -431,7 +431,10 @@ $$;
 -- Tokens are stateless, so there is no list of outstanding ids to walk; instead
 -- a wallet-wide tombstone is written and `settlex_wallet()` denies any token
 -- issued at or before it.
-CREATE OR REPLACE FUNCTION public.settlex_revoke_wallet (p_wallet_address TEXT) RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER
+CREATE OR REPLACE FUNCTION public.settlex_revoke_wallet (
+    p_wallet_address TEXT,
+    p_ttl_seconds INTEGER DEFAULT NULL
+) RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER
 SET
     search_path = public AS $$
 DECLARE
@@ -439,6 +442,10 @@ DECLARE
     -- or the tombstone would lapse while a denied token is still valid.
     v_max_ttl INTERVAL := INTERVAL '13 hours';
 BEGIN
+    IF p_ttl_seconds IS NOT NULL AND p_ttl_seconds > 0 THEN
+        v_max_ttl := (p_ttl_seconds || ' seconds')::INTERVAL;
+    END IF;
+
     INSERT INTO public.revoked_wallets (wallet_address, revoked_before, expires_at)
     VALUES (p_wallet_address, NOW(), NOW() + v_max_ttl)
     ON CONFLICT (wallet_address) DO UPDATE
@@ -447,6 +454,14 @@ BEGIN
 
     DELETE FROM public.revoked_wallets WHERE expires_at <= NOW();
     RETURN 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.settlex_revoke_wallet (p_wallet_address TEXT) RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER
+SET
+    search_path = public AS $$
+BEGIN
+    RETURN public.settlex_revoke_wallet(p_wallet_address, NULL);
 END;
 $$;
 
@@ -462,11 +477,20 @@ FROM
     anon,
     authenticated;
 
+REVOKE ALL ON FUNCTION public.settlex_revoke_wallet (TEXT, INTEGER)
+FROM
+    PUBLIC,
+    anon,
+    authenticated;
+
 GRANT
 EXECUTE ON FUNCTION public.settlex_revoke_token (TEXT, TEXT, TIMESTAMPTZ) TO service_role;
 
 GRANT
 EXECUTE ON FUNCTION public.settlex_revoke_wallet (TEXT) TO service_role;
+
+GRANT
+EXECUTE ON FUNCTION public.settlex_revoke_wallet (TEXT, INTEGER) TO service_role;
 
 -- Purges denylist rows whose tokens have expired on their own. Called by the
 -- server on sign-out; safe to also run from pg_cron.

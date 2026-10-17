@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="public/logo.svg" alt="SettleX Logo" height="52" />
 </p>
 
@@ -379,7 +379,7 @@ SUPABASE_JWT_SECRET=your-supabase-jwt-secret
 # production and must differ from SUPABASE_JWT_SECRET (the server refuses to
 # boot otherwise); falls back to it in dev. Generate: openssl rand -base64 48
 AUTH_CHALLENGE_SECRET=
-# Optional. Session lifetime in seconds (default 43200 = 12h, max 86400).
+# Optional. Session lifetime in seconds (default 3600 = 1h, capped at 43200 = 12h).
 AUTH_SESSION_TTL_SECONDS=43200
 ```
 

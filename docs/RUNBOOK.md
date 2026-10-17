@@ -30,7 +30,7 @@ them in the browser bundle and let anyone mint a token for any wallet):
   `SUPABASE_JWT_SECRET`. The server refuses to boot without it, so a missing
   value fails the deploy rather than the first sign-in. Falls back to the JWT
   secret outside production only.
-- `AUTH_SESSION_TTL_SECONDS` — optional, default 43200 (12h), capped at 86400.
+- `AUTH_SESSION_TTL_SECONDS` — optional, default 3600 (1h), capped at 43200 (12h).
 
 Set the same server-only values in the deployment environment (Vercel → Project
 Settings → Environment Variables, or equivalent), not just in `.env.local`.
