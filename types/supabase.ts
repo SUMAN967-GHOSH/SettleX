@@ -26,6 +26,7 @@ export interface Database {
           created_by_wallet: string;
           member_wallets: string[];
           accepted_wallets: string[];
+          declined_wallets: string[];
         };
         Insert: {
           id?: string;
@@ -43,6 +44,7 @@ export interface Database {
           created_by_wallet: string;
           member_wallets?: string[];
           accepted_wallets?: string[];
+          declined_wallets?: string[];
         };
         Update: {
           id?: string;
@@ -60,6 +62,7 @@ export interface Database {
           created_by_wallet?: string;
           member_wallets?: string[];
           accepted_wallets?: string[];
+          declined_wallets?: string[];
         };
       };
       trips: {
@@ -75,6 +78,7 @@ export interface Database {
           created_by_wallet: string;
           member_wallets: string[];
           accepted_wallets: string[];
+          declined_wallets: string[];
         };
         Insert: {
           id?: string;
@@ -88,6 +92,7 @@ export interface Database {
           created_by_wallet: string;
           member_wallets?: string[];
           accepted_wallets?: string[];
+          declined_wallets?: string[];
         };
         Update: {
           id?: string;
@@ -101,6 +106,7 @@ export interface Database {
           created_by_wallet?: string;
           member_wallets?: string[];
           accepted_wallets?: string[];
+          declined_wallets?: string[];
         };
       };
     };
@@ -116,12 +122,27 @@ export interface Database {
           title: string;
           created_by_wallet: string;
           created_at: string;
+          total_amount: string;
+          caller_share: string;
         }[];
       };
       accept_invitation: {
         Args: {
           p_entity_type: "expense" | "trip";
           p_entity_id: string;
+        };
+        Returns: undefined;
+      };
+      decline_invitation: {
+        Args: {
+          p_entity_type: "expense" | "trip";
+          p_entity_id: string;
+        };
+        Returns: undefined;
+      };
+      leave_trip: {
+        Args: {
+          p_trip_id: string;
         };
         Returns: undefined;
       };

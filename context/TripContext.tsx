@@ -462,6 +462,10 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
           .eq("id", tripId);
 
         if (error) throw error;
+
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("settlex:consent-changed"));
+        }
       } catch (err) {
         reportError("trip.add_expense_failed", err, {
           fields: { tripId, ...supabaseErrorFields(err) },
