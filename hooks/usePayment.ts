@@ -58,6 +58,7 @@ export function usePayment({ expenseId }: UsePaymentOpts) {
     refreshBalance,
     refreshNetwork,
     expectedNetwork,
+    reconcile,
   } = useWallet();
   const { markSharePaid } = useExpense();
   const { success: toastSuccess, error: toastError, info: toastInfo } = useToast();
@@ -264,6 +265,7 @@ export function usePayment({ expenseId }: UsePaymentOpts) {
       }
     },
     [
+      reconcile,
       publicKey,
       hasCurrentPaymentNetwork,
       expenseId,
