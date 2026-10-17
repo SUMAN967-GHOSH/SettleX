@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Trash2, Zap, Users, ChevronDown } from "lucide-react";
 import { Input, Textarea } from "@/components/ui/Input";
@@ -8,6 +8,7 @@ import { SplitCalculator } from "./SplitCalculator";
 import { calculateSplit, isValidXLMAmount, isValidStellarAddress, stroopsToXlm, xlmToStroops } from "@/lib/split/calculator";
 import { useExpense } from "@/hooks/useExpense";
 import { useToast } from "@/components/ui/Toast";
+import { AuthContext } from "@/context/AuthContext";
 import type { Expense, ExpenseFormData, Member, SplitMode } from "@/types/expense";
 
 const MIN_SPLIT_WEIGHT = 1;
@@ -78,6 +79,11 @@ export function ExpenseForm({
   // ── Field-level errors ──────────────────────────────────────────────────────
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  // ── User profile resolution ─────────────────────────────────────────────────
+  const authContext = useContext(AuthContext);
+  const resolveUserProfile = authContext?.resolveUserProfile;
+  const [resolvedProfiles, setResolvedProfiles] = useState<Record<string, string>>({});
+
   // ── Live split preview ──────────────────────────────────────────────────────
   // Preview shows as soon as: valid amount + at least 2 members have names.
   // Wallet addresses are NOT required for the preview — they are only
@@ -121,6 +127,30 @@ export function ExpenseForm({
       prev.map((m) => (m.id === id ? { ...m, ...patch } : m))
     );
   };
+
+  const handleMemberAddressChange = useCallback(
+    async (id: string, address: string) => {
+      updateMember(id, { walletAddress: address });
+      const trimmed = address.trim();
+      if (!resolveUserProfile || !isValidStellarAddress(trimmed)) return;
+      try {
+        const verifiedName = await resolveUserProfile(trimmed);
+        if (verifiedName) {
+          setResolvedProfiles((prev) => ({ ...prev, [trimmed]: verifiedName }));
+          setMembers((prev) =>
+            prev.map((m) =>
+              m.id === id && (!m.name.trim() || m.name.startsWith("Member") || m.name.startsWith("Person"))
+                ? { ...m, name: verifiedName }
+                : m
+            )
+          );
+        }
+      } catch {
+        // ignore profile lookup failure
+      }
+    },
+    [resolveUserProfile]
+  );
 
   // ── Validation ──────────────────────────────────────────────────────────────
   function validate(): boolean {
@@ -428,13 +458,39 @@ export function ExpenseForm({
                     <input
                       placeholder="Stellar address G… (required to pay)"
                       value={member.walletAddress ?? ""}
-                      onChange={(e) => updateMember(member.id, { walletAddress: e.target.value })}
+                      onChange={(e) => handleMemberAddressChange(member.id, e.target.value)}
                       className={`w-full rounded-lg border px-3 py-2 text-sm bg-white outline-none transition-all font-mono
                         ${errors[`member_addr_${i}`]
                           ? "border-red-300 focus:border-red-400"
                           : "border-[#E5E5E5] focus:border-[#B9FF66] focus:ring-2 focus:ring-[#B9FF66]/20"
                         }`}
                     />
+                    {/* Verified user profile resolution indicator */}
+                    {(() => {
+                      const addr = member.walletAddress?.trim();
+                      if (!addr || !isValidStellarAddress(addr)) return null;
+                      const verifiedName = resolvedProfiles[addr];
+                      if (!verifiedName) return null;
+                      if (member.name === verifiedName) {
+                        return (
+                          <p className="text-[11px] text-emerald-600 font-medium">
+                            ✓ Verified profile: {verifiedName}
+                          </p>
+                        );
+                      }
+                      return (
+                        <div className="flex items-center gap-1.5 text-[11px] text-[#555]">
+                          <span>Verified profile: <strong>{verifiedName}</strong></span>
+                          <button
+                            type="button"
+                            onClick={() => updateMember(member.id, { name: verifiedName })}
+                            className="text-xs text-blue-600 underline hover:text-blue-800"
+                          >
+                            Use verified name
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {/* Inline duplicate check — shown while user types, before submit */}
                     {(() => {
                       const addr = member.walletAddress?.trim();

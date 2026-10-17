@@ -6,9 +6,36 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[];
 
-export interface Database {
+export type Database = {
   public: {
     Tables: {
+      users: {
+        Row: {
+          id: string;
+          wallet_address: string;
+          display_name: string;
+          created_at: string;
+          updated_at: string;
+          last_login_at: string;
+        };
+        Insert: {
+          id?: string;
+          wallet_address: string;
+          display_name: string;
+          created_at?: string;
+          updated_at?: string;
+          last_login_at?: string;
+        };
+        Update: {
+          id?: string;
+          wallet_address?: string;
+          display_name?: string;
+          created_at?: string;
+          updated_at?: string;
+          last_login_at?: string;
+        };
+        Relationships: [];
+      };
       expenses: {
         Row: {
           id: string;
@@ -23,6 +50,7 @@ export interface Database {
           created_at: string;
           updated_at: string;
           settled: boolean;
+          version: number;
           created_by_wallet: string;
           member_wallets: string[];
           accepted_wallets: string[];
@@ -36,11 +64,12 @@ export interface Database {
           currency?: string;
           split_mode: string;
           paid_by_member_id: string;
-          members: Json;
-          shares: Json;
+          members?: Json;
+          shares?: Json;
           created_at?: string;
           updated_at?: string;
           settled?: boolean;
+          version?: number;
           created_by_wallet: string;
           member_wallets?: string[];
           accepted_wallets?: string[];
@@ -59,11 +88,13 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
           settled?: boolean;
+          version?: number;
           created_by_wallet?: string;
           member_wallets?: string[];
           accepted_wallets?: string[];
           declined_wallets?: string[];
         };
+        Relationships: [];
       };
       trips: {
         Row: {
@@ -84,7 +115,7 @@ export interface Database {
           id?: string;
           name: string;
           description?: string | null;
-          members: Json;
+          members?: Json;
           expense_ids?: string[];
           created_at?: string;
           updated_at?: string;
@@ -108,6 +139,67 @@ export interface Database {
           accepted_wallets?: string[];
           declined_wallets?: string[];
         };
+        Relationships: [];
+      };
+      auth_nonces: {
+        Row: {
+          nonce: string;
+          wallet_address: string;
+          issued_at: string;
+          expires_at: string;
+          consumed_at: string | null;
+        };
+        Insert: {
+          nonce: string;
+          wallet_address: string;
+          issued_at?: string;
+          expires_at: string;
+          consumed_at?: string | null;
+        };
+        Update: {
+          nonce?: string;
+          wallet_address?: string;
+          issued_at?: string;
+          expires_at?: string;
+          consumed_at?: string | null;
+        };
+        Relationships: [];
+      };
+      auth_rate_limits: {
+        Row: {
+          key: string;
+          bucket_start: string;
+          count: number;
+        };
+        Insert: {
+          key: string;
+          bucket_start: string;
+          count?: number;
+        };
+        Update: {
+          key?: string;
+          bucket_start?: string;
+          count?: number;
+        };
+        Relationships: [];
+      };
+      auth_revocations: {
+        Row: {
+          wallet_address: string;
+          revoked_before: string;
+          created_at: string;
+        };
+        Insert: {
+          wallet_address: string;
+          revoked_before: string;
+          created_at?: string;
+        };
+        Update: {
+          wallet_address?: string;
+          revoked_before?: string;
+          created_at?: string;
+        };
+        Relationships: [];
       };
     };
     Views: {
@@ -128,14 +220,14 @@ export interface Database {
       };
       accept_invitation: {
         Args: {
-          p_entity_type: "expense" | "trip";
+          p_entity_type: string;
           p_entity_id: string;
         };
         Returns: undefined;
       };
       decline_invitation: {
         Args: {
-          p_entity_type: "expense" | "trip";
+          p_entity_type: string;
           p_entity_id: string;
         };
         Returns: undefined;
@@ -146,9 +238,59 @@ export interface Database {
         };
         Returns: undefined;
       };
+      mark_share_paid: {
+        Args: {
+          p_expense_id: string;
+          p_member_id: string;
+          p_tx_hash: string;
+        };
+        Returns: Database["public"]["Tables"]["expenses"]["Row"][];
+      };
+      resolve_user_profile: {
+        Args: {
+          p_wallet_address: string;
+        };
+        Returns: {
+          wallet_address: string;
+          display_name: string;
+        }[];
+      };
+      settlex_wallet: {
+        Args: Record<PropertyKey, never>;
+        Returns: string;
+      };
+      auth_burn_nonce: {
+        Args: {
+          p_wallet_address: string;
+          p_nonce: string;
+        };
+        Returns: boolean;
+      };
+      auth_rate_limit: {
+        Args: {
+          p_key: string;
+          p_max_requests: number;
+          p_window_ms: number;
+        };
+        Returns: {
+          allowed: boolean;
+          remaining: number;
+          retry_after: number;
+        }[];
+      };
+      auth_revoke_session: {
+        Args: {
+          p_wallet_address: string;
+          p_revoked_before: string;
+        };
+        Returns: undefined;
+      };
     };
     Enums: {
       [_ in never]: never;
     };
+    CompositeTypes: {
+      [_ in never]: never;
+    };
   };
-}
+};

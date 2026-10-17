@@ -451,16 +451,16 @@ export async function getWalletSession(
 
 // ─── Authenticated client ─────────────────────────────────────────────────────
 
-let memoizedClient: { token: string; client: SupabaseClient } | null = null;
+let memoizedClient: { token: string; client: SupabaseClient<Database> } | null = null;
 
-function buildClient(accessToken: string): SupabaseClient {
+function buildClient(accessToken: string): SupabaseClient<Database> {
   if (memoizedClient?.token === accessToken) return memoizedClient.client;
 
   if (memoizedClient) {
     void memoizedClient.client.removeAllChannels();
   }
 
-  const client = createClient(supabaseUrl, supabaseAnonKey, {
+  const client = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
     realtime: { params: { eventsPerSecond: 10 } },
     global: { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -481,7 +481,7 @@ function buildClient(accessToken: string): SupabaseClient {
 export async function getAuthenticatedClient(
   walletAddress: string,
   options: SessionOptions = {},
-): Promise<SupabaseClient | null> {
+): Promise<SupabaseClient<Database> | null> {
   const session = await getWalletSession(walletAddress, options);
   if (!session) return null;
   return buildClient(session.accessToken);
@@ -493,15 +493,8 @@ export async function getAuthenticatedClient(
  */
 export async function requireAuthenticatedClient(
   walletAddress: string,
-): Promise<SupabaseClient> {
+): Promise<SupabaseClient<Database>> {
   const client = await getAuthenticatedClient(walletAddress, { interactive: true });
   if (!client) throw new WalletSessionError("Wallet sign-in is required.");
   return client;
-}
-
-export function getTypedClient() {
-  return createClient<Database>(supabaseUrl, supabaseAnonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    realtime: { params: { eventsPerSecond: 10 } },
-  });
 }
