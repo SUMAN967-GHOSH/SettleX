@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useContext, useState } from "react";
 import { Plus, Trash2, UserPlus } from "lucide-react";
 import type { Member } from "@/types/expense";
 import type { TripFormData } from "@/types/trip";
 import { Input } from "@/components/ui/Input";
 import { cn } from "@/lib/utils";
+import { AuthContext } from "@/context/AuthContext";
 
 interface TripFormProps {
   onSubmit: (data: TripFormData) => void;
@@ -46,6 +47,11 @@ export function TripForm({ onSubmit, onCancel, initialData, currentUserPublicKey
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  // ── User profile resolution ─────────────────────────────────────────────────
+  const authContext = useContext(AuthContext);
+  const resolveUserProfile = authContext?.resolveUserProfile;
+  const [resolvedProfiles, setResolvedProfiles] = useState<Record<string, string>>({});
+
   // ── Member mutations ───────────────────────────────────────────────────────
 
   const updateMember = (id: string, field: keyof Member, value: string) => {
@@ -53,6 +59,30 @@ export function TripForm({ onSubmit, onCancel, initialData, currentUserPublicKey
       prev.map((m) => (m.id === id ? { ...m, [field]: value } : m))
     );
   };
+
+  const handleMemberAddressChange = useCallback(
+    async (id: string, address: string) => {
+      updateMember(id, "walletAddress", address);
+      const trimmed = address.trim();
+      if (!resolveUserProfile || !/^G[A-Z2-7]{55}$/.test(trimmed)) return;
+      try {
+        const verifiedName = await resolveUserProfile(trimmed);
+        if (verifiedName) {
+          setResolvedProfiles((prev) => ({ ...prev, [trimmed]: verifiedName }));
+          setMembers((prev) =>
+            prev.map((m) =>
+              m.id === id && (!m.name.trim() || m.name.startsWith("Member"))
+                ? { ...m, name: verifiedName }
+                : m
+            )
+          );
+        }
+      } catch {
+        // ignore profile resolution failure
+      }
+    },
+    [resolveUserProfile]
+  );
 
   const addMember = () => {
     if (members.length >= MAX_MEMBERS) return;
@@ -188,10 +218,35 @@ export function TripForm({ onSubmit, onCancel, initialData, currentUserPublicKey
                     placeholder="G… Stellar address *"
                     value={member.walletAddress ?? ""}
                     onChange={(e) =>
-                      updateMember(member.id, "walletAddress", e.target.value)
+                      handleMemberAddressChange(member.id, e.target.value)
                     }
                     error={errors[`member_addr_${i}`]}
                   />
+                  {(() => {
+                    const addr = member.walletAddress?.trim();
+                    if (!addr || !/^G[A-Z2-7]{55}$/.test(addr)) return null;
+                    const verifiedName = resolvedProfiles[addr];
+                    if (!verifiedName) return null;
+                    if (member.name === verifiedName) {
+                      return (
+                        <p className="text-[11px] text-emerald-600 font-medium px-1">
+                          ✓ Verified user profile: {verifiedName}
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className="flex items-center gap-1.5 text-[11px] text-[#555] px-1">
+                        <span>Verified profile: <strong>{verifiedName}</strong></span>
+                        <button
+                          type="button"
+                          onClick={() => updateMember(member.id, "name", verifiedName)}
+                          className="text-xs text-blue-600 underline hover:text-blue-800"
+                        >
+                          Use verified name
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {!errors[`member_addr_${i}`] && (
                     <p className="text-[10px] text-[#AAA] px-1">Required — used to send XLM payment</p>
                   )}

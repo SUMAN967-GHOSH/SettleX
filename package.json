@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "types:supabase": "node scripts/generate-supabase-types.js"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^2.7.0",
