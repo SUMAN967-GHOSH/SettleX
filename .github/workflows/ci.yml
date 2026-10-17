@@ -47,30 +47,50 @@ jobs:
         run: |
           node -e "
             const fs = require('fs');
-            const sql = fs.readFileSync('supabase-setup.sql', 'utf8');
-            const funcs = sql.split(/CREATE OR REPLACE FUNCTION/i).slice(1);
+            const path = require('path');
+            const files = ['supabase-setup.sql'];
+            const migDir = 'supabase/migrations';
+            if (fs.existsSync(migDir)) {
+              for (const f of fs.readdirSync(migDir)) {
+                if (f.endsWith('.sql')) files.push(path.join(migDir, f));
+              }
+            }
             let errors = 0;
-            for (const chunk of funcs) {
-              const header = chunk.split(/\$\$|\$body\$/i)[0];
-              const nameMatch = header.match(/^\s*([a-zA-Z0-9_\.]+)/);
-              const funcName = nameMatch ? nameMatch[1] : 'unknown';
-              if (!/search_path\s*=/i.test(header)) {
-                console.error('ERROR: Function ' + funcName + ' is missing SET search_path');
-                errors++;
+            for (const file of files) {
+              const sql = fs.readFileSync(file, 'utf8');
+              const funcs = sql.split(/CREATE OR REPLACE FUNCTION/i).slice(1);
+              for (const chunk of funcs) {
+                const header = chunk.split(/\$\$|\$body\$/i)[0];
+                const nameMatch = header.match(/^\s*([a-zA-Z0-9_\.]+)/);
+                const funcName = nameMatch ? nameMatch[1] : 'unknown';
+                if (!/search_path\s*=/i.test(header)) {
+                  console.error('ERROR in ' + file + ': Function ' + funcName + ' is missing SET search_path');
+                  errors++;
+                }
               }
             }
             if (errors > 0) {
               console.error('Failed Supabase DB function search_path lint with ' + errors + ' errors.');
               process.exit(1);
             }
-            console.log('Passed Supabase DB function search_path lint.');
+            console.log('Passed Supabase DB function search_path lint across ' + files.length + ' files.');
           "
 
       - name: Validate Supabase SQL Syntax
         run: |
           docker run --name pg-lint -e POSTGRES_PASSWORD=postgres -d postgres
-          sleep 5
+          docker exec -i pg-lint sh -c 'until pg_isready -U postgres; do sleep 1; done'
+          docker exec -i pg-lint psql -U postgres -c "CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role; CREATE PUBLICATION supabase_realtime;"
+          echo "Validating supabase-setup.sql..."
           docker exec -i pg-lint psql -U postgres -v ON_ERROR_STOP=1 -f - < supabase-setup.sql
+          echo "Validating versioned migrations on clean database..."
+          docker exec -i pg-lint psql -U postgres -c "CREATE DATABASE settlex_migrations; GRANT ALL ON DATABASE settlex_migrations TO postgres;"
+          docker exec -i pg-lint psql -U postgres -d settlex_migrations -c "CREATE PUBLICATION supabase_realtime;"
+          for mig in $(ls supabase/migrations/*.sql | sort); do
+            echo "Applying $mig"
+            docker exec -i pg-lint psql -U postgres -d settlex_migrations -v ON_ERROR_STOP=1 -f - < "$mig"
+          done
+          docker rm -f pg-lint
 
       - name: Test with coverage gate
         run: npm run test:coverage -- --runInBand
