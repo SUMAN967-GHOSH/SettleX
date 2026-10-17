@@ -47,6 +47,7 @@ interface AuthContextType {
   /** Re-runs the wallet signing handshake. */
   refreshSession: () => Promise<void>;
   updateProfile: (updates: Partial<Pick<User, "displayName">>) => Promise<void>;
+  resolveUserProfile: (walletAddress: string) => Promise<string | null>;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -266,9 +267,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(newUser);
           saveUserToCache(newUser);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Check for network errors
-        if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+        const errMsg = err instanceof Error ? err.message : "";
+        const errName = err instanceof Error ? err.name : "";
+        if (errMsg.includes('Failed to fetch') || errName === 'TypeError') {
           throw new Error("Cannot connect to server. Please check your internet connection or try again later.");
         }
         throw err;
@@ -313,9 +316,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(signedInUser);
         saveUserToCache(signedInUser);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Check for network errors
-      if (err?.message?.includes('Failed to fetch') || err?.name === 'TypeError') {
+      const errMsg = err instanceof Error ? err.message : "";
+      const errName = err instanceof Error ? err.name : "";
+      if (errMsg.includes('Failed to fetch') || errName === 'TypeError') {
         throw new Error("Cannot connect to server. Please check your internet connection and try again.");
       }
       throw err;
@@ -403,11 +408,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(updatedUser);
           saveUserToCache(updatedUser);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         throw err;
       }
     },
     [publicKey, user]
+  );
+
+  // ── Resolve profile: look up verified display name ────────────────────────
+
+  const resolveUserProfile = useCallback(
+    async (walletAddress: string): Promise<string | null> => {
+      if (!publicKey || !walletAddress || !walletAddress.trim()) return null;
+      try {
+        const client = await requireAuthenticatedClient(publicKey);
+        const { data, error } = await client.rpc("resolve_user_profile", {
+          p_wallet_address: walletAddress.trim(),
+        });
+        if (error || !data || data.length === 0) return null;
+        return data[0].display_name;
+      } catch {
+        return null;
+      }
+    },
+    [publicKey]
   );
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -422,6 +446,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signOut,
     refreshSession,
     updateProfile,
+    resolveUserProfile,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
