@@ -69,7 +69,11 @@ SettleX uses:
   closed: `/api/auth/verify` returns 503 rather than minting a token it cannot
   prove is single-use. The rate limiter deliberately falls back to its local
   window so a database outage does not block every sign-in. That fallback is
-  weaker across instances and is not a substitute for an edge/WAF rate limit.
+  weaker across instances. Client IP rate limiting uses platform-provided IPs
+  (`request.ip` / `x-real-ip` or the last reverse proxy hop) alongside per-wallet
+  rate limits on challenge and verify, but application-level throttling is not a
+  substitute for an edge/WAF rate limit (e.g., Cloudflare WAF, AWS WAF, or Vercel
+  Firewall) in front of the deployment to mitigate distributed floods.
 - **Token revocation — conditionally mitigated.** Current schema and route code
   maintain `revoked_tokens` and `revoked_wallets`, and `settlex_wallet()` denies
   revoked JWTs. This depends on the same service-role configuration and current
