@@ -4,7 +4,11 @@ import React from "react";
 import { CheckCircle2, ExternalLink, Layers } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { TransactionHash } from "@/components/payment/TransactionHash";
-import { STELLAR_EXPLORER } from "@/lib/utils/constants";
+import {
+  STELLAR_EXPLORER,
+  STELLAR_NETWORK,
+  stellarNetworkLabel,
+} from "@/lib/utils/constants";
 import { cn, formatAddress, formatXLM } from "@/lib/utils";
 
 export interface ReceiptModalProps {
@@ -33,7 +37,7 @@ export function ReceiptModal({
 }: ReceiptModalProps) {
   const explorerUrl = `${STELLAR_EXPLORER}/tx/${txHash}`;
   const displayAmount = formatXLM(amount);
-  const networkName = STELLAR_NETWORK === "PUBLIC" ? "Mainnet" : "Testnet";
+  const networkName = stellarNetworkLabel(STELLAR_NETWORK);
 
   return (
     <Modal

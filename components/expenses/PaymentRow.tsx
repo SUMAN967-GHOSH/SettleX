@@ -8,6 +8,7 @@ import { STELLAR_EXPLORER } from "@/lib/utils/constants";
 import { PayButton } from "@/components/payment/PayButton";
 import { QRToggle } from "@/components/payment/QRCodeDisplay";
 import { ReceiptModal } from "@/components/expenses/ReceiptModal";
+import { useWallet } from "@/hooks/useWallet";
 import type { SplitShare } from "@/types/expense";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

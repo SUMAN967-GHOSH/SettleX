@@ -8,6 +8,12 @@ import { PaymentRow } from "@/components/expenses/PaymentRow";
 import { ReceiptModal } from "@/components/expenses/ReceiptModal";
 import type { SplitShare } from "@/types/expense";
 
+// PaymentRow reads network compatibility from the wallet context; these tests
+// render it standalone, so stand in for the provider.
+jest.mock("@/hooks/useWallet", () => ({
+  useWallet: () => ({ isNetworkCompatible: true }),
+}));
+
 describe("Issue #130: mark_share_paid audit record (paidBy and markedAt)", () => {
   const CREATOR_WALLET = "GCREATORAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   const MEMBER_WALLET = "GMEMBERBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
