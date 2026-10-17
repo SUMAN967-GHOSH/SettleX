@@ -15,10 +15,11 @@
 -- ============================================================================
 
 -- Create users table (for wallet-based authentication)
+-- Create users table (for wallet-based authentication)
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
     wallet_address TEXT UNIQUE NOT NULL, -- Stellar wallet address (primary identifier)
-    display_name TEXT NOT NULL, -- User's display name (required)
+    display_name TEXT NOT NULL CONSTRAINT users_display_name_check CHECK (char_length(display_name) BETWEEN 1 AND 50), -- User's display name (required)
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     last_login_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
@@ -27,16 +28,20 @@ CREATE TABLE IF NOT EXISTS users (
 -- Create expenses table
 CREATE TABLE IF NOT EXISTS expenses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid (),
-    title TEXT NOT NULL,
-    description TEXT,
+    title TEXT NOT NULL CONSTRAINT expenses_title_check CHECK (char_length(title) BETWEEN 1 AND 120),
+    description TEXT CONSTRAINT expenses_description_check CHECK (description IS NULL OR char_length(description) <= 100),
     total_amount TEXT NOT NULL,
     currency TEXT DEFAULT 'XLM' NOT NULL,
     split_mode TEXT NOT NULL CHECK (
         split_mode IN ('equal', 'custom')
     ),
     paid_by_member_id TEXT NOT NULL,
-    members JSONB NOT NULL DEFAULT '[]',
-    shares JSONB NOT NULL DEFAULT '[]',
+    members JSONB NOT NULL DEFAULT '[]' CONSTRAINT expenses_members_check CHECK (
+        jsonb_typeof(members) = 'array' AND jsonb_array_length(members) <= 50
+    ),
+    shares JSONB NOT NULL DEFAULT '[]' CONSTRAINT expenses_shares_check CHECK (
+        jsonb_typeof(shares) = 'array' AND jsonb_array_length(shares) <= 50
+    ),
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     settled BOOLEAN DEFAULT FALSE NOT NULL,
@@ -50,9 +55,11 @@ CREATE TABLE IF NOT EXISTS expenses (
 -- Create trips table
 CREATE TABLE IF NOT EXISTS trips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  description TEXT,
-  members JSONB NOT NULL DEFAULT '[]',
+  name TEXT NOT NULL CONSTRAINT trips_name_check CHECK (char_length(name) BETWEEN 1 AND 120),
+  description TEXT CONSTRAINT trips_description_check CHECK (description IS NULL OR char_length(description) <= 100),
+  members JSONB NOT NULL DEFAULT '[]' CONSTRAINT trips_members_check CHECK (
+    jsonb_typeof(members) = 'array' AND jsonb_array_length(members) <= 50
+  ),
   expense_ids TEXT[] DEFAULT ARRAY[]::TEXT[] NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
@@ -156,6 +163,92 @@ BEGIN
         WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'email'
     ) THEN
         ALTER TABLE users DROP COLUMN email;
+    END IF;
+END $$;
+
+-- Add length and size constraints if missing on existing tables
+DO $$ 
+BEGIN
+    -- users table constraints
+    IF EXISTS (SELECT 1 FROM users LIMIT 1) THEN
+        UPDATE users SET display_name = 'User' WHERE display_name IS NULL OR display_name = '';
+        UPDATE users SET display_name = SUBSTRING(display_name FROM 1 FOR 50) WHERE char_length(display_name) > 50;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'users'::regclass AND contype = 'c' AND conname = 'users_display_name_check'
+    ) THEN
+        ALTER TABLE users ADD CONSTRAINT users_display_name_check
+            CHECK (char_length(display_name) BETWEEN 1 AND 50);
+    END IF;
+
+    -- expenses table constraints
+    IF EXISTS (SELECT 1 FROM expenses LIMIT 1) THEN
+        UPDATE expenses SET title = SUBSTRING(title FROM 1 FOR 120) WHERE char_length(title) > 120;
+        UPDATE expenses SET description = SUBSTRING(description FROM 1 FOR 100) WHERE char_length(description) > 100;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'expenses'::regclass AND contype = 'c' AND conname = 'expenses_title_check'
+    ) THEN
+        ALTER TABLE expenses ADD CONSTRAINT expenses_title_check
+            CHECK (char_length(title) BETWEEN 1 AND 120);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'expenses'::regclass AND contype = 'c' AND conname = 'expenses_description_check'
+    ) THEN
+        ALTER TABLE expenses ADD CONSTRAINT expenses_description_check
+            CHECK (description IS NULL OR char_length(description) <= 100);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'expenses'::regclass AND contype = 'c' AND conname = 'expenses_members_check'
+    ) THEN
+        ALTER TABLE expenses ADD CONSTRAINT expenses_members_check
+            CHECK (jsonb_typeof(members) = 'array' AND jsonb_array_length(members) <= 50);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'expenses'::regclass AND contype = 'c' AND conname = 'expenses_shares_check'
+    ) THEN
+        ALTER TABLE expenses ADD CONSTRAINT expenses_shares_check
+            CHECK (jsonb_typeof(shares) = 'array' AND jsonb_array_length(shares) <= 50);
+    END IF;
+
+    -- trips table constraints
+    IF EXISTS (SELECT 1 FROM trips LIMIT 1) THEN
+        UPDATE trips SET name = SUBSTRING(name FROM 1 FOR 120) WHERE char_length(name) > 120;
+        UPDATE trips SET description = SUBSTRING(description FROM 1 FOR 100) WHERE char_length(description) > 100;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'trips'::regclass AND contype = 'c' AND conname = 'trips_name_check'
+    ) THEN
+        ALTER TABLE trips ADD CONSTRAINT trips_name_check
+            CHECK (char_length(name) BETWEEN 1 AND 120);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'trips'::regclass AND contype = 'c' AND conname = 'trips_description_check'
+    ) THEN
+        ALTER TABLE trips ADD CONSTRAINT trips_description_check
+            CHECK (description IS NULL OR char_length(description) <= 100);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conrelid = 'trips'::regclass AND contype = 'c' AND conname = 'trips_members_check'
+    ) THEN
+        ALTER TABLE trips ADD CONSTRAINT trips_members_check
+            CHECK (jsonb_typeof(members) = 'array' AND jsonb_array_length(members) <= 50);
     END IF;
 END $$;
 
@@ -761,12 +854,16 @@ BEGIN
     IF v_member_count < 2 THEN
         RAISE EXCEPTION 'An expense requires at least two members';
     END IF;
+    IF v_member_count > 50 THEN
+        RAISE EXCEPTION 'An expense supports at most 50 members';
+    END IF;
 
     IF EXISTS (
         SELECT 1
         FROM pg_catalog.jsonb_array_elements(p_members) AS m
         WHERE COALESCE(m->>'id', '') = ''
            OR COALESCE(m->>'name', '') = ''
+           OR pg_catalog.char_length(m->>'name') > 50
            OR COALESCE(m->>'walletAddress', '') !~ '^G[A-Z2-7]{55}$'
     ) OR (
         SELECT pg_catalog.count(*) <> pg_catalog.count(DISTINCT m->>'id')
@@ -819,6 +916,7 @@ BEGIN
         FROM pg_catalog.jsonb_array_elements(p_shares) AS s
         WHERE COALESCE(s->>'memberId', '') = ''
            OR COALESCE(s->>'name', '') = ''
+           OR pg_catalog.char_length(s->>'name') > 50
            OR s->>'memberId' = p_paid_by_member_id
            OR NOT (s ? 'paid')
            OR pg_catalog.jsonb_typeof(s->'paid') <> 'boolean'
@@ -971,11 +1069,15 @@ BEGIN
        OR pg_catalog.jsonb_array_length(NEW.members) < 2 THEN
         RAISE EXCEPTION 'A trip requires at least two members';
     END IF;
+    IF pg_catalog.jsonb_array_length(NEW.members) > 50 THEN
+        RAISE EXCEPTION 'A trip supports at most 50 members';
+    END IF;
     IF EXISTS (
         SELECT 1
         FROM pg_catalog.jsonb_array_elements(NEW.members) AS m
         WHERE COALESCE(m->>'id', '') = ''
            OR COALESCE(m->>'name', '') = ''
+           OR pg_catalog.char_length(m->>'name') > 50
            OR COALESCE(m->>'walletAddress', '') !~ '^G[A-Z2-7]{55}$'
     ) OR (
         SELECT pg_catalog.count(*) <> pg_catalog.count(DISTINCT m->>'id')
