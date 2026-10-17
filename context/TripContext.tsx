@@ -152,7 +152,7 @@ export function TripProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    getAuthenticatedClient(publicKey)
+    getAuthenticatedClient(publicKey, { interactive: false })
       .then((resolved) => {
         if (!cancelled) setClient(resolved);
       })
