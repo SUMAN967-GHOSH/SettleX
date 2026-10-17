@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS expenses (
     -- New: Track creator and member wallets for authentication
     created_by_wallet TEXT NOT NULL,  -- Stellar address of expense creator
     member_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[], -- Invited wallet addresses
-    accepted_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] -- Members who explicitly accepted
+    accepted_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[], -- Members who explicitly accepted
+    declined_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] -- Members who declined/left
 );
 
 -- Create trips table
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS trips (
   -- New: Track creator and member wallets for authentication
   created_by_wallet TEXT NOT NULL,  -- Stellar address of trip creator
   member_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[], -- Invited wallet addresses
-  accepted_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] -- Members who explicitly accepted
+  accepted_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[], -- Members who explicitly accepted
+  declined_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] -- Members who declined/left
 );
 
 -- ============================================================================
@@ -104,6 +106,13 @@ BEGIN
         SET accepted_wallets = ARRAY[created_by_wallet]
         WHERE created_by_wallet <> '';
     END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name = 'declined_wallets'
+    ) THEN
+        ALTER TABLE expenses ADD COLUMN declined_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+    END IF;
 END $$;
 
 -- Add wallet columns to trips table if they don't exist
@@ -131,6 +140,13 @@ BEGIN
         UPDATE trips
         SET accepted_wallets = ARRAY[created_by_wallet]
         WHERE created_by_wallet <> '';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'trips' AND column_name = 'declined_wallets'
+    ) THEN
+        ALTER TABLE trips ADD COLUMN declined_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
     END IF;
 END $$;
 
@@ -176,6 +192,8 @@ CREATE INDEX IF NOT EXISTS idx_expenses_member_wallets ON expenses USING GIN (me
 
 CREATE INDEX IF NOT EXISTS idx_expenses_accepted_wallets ON expenses USING GIN (accepted_wallets);
 
+CREATE INDEX IF NOT EXISTS idx_expenses_declined_wallets ON expenses USING GIN (declined_wallets);
+
 CREATE INDEX IF NOT EXISTS idx_expenses_created_at ON expenses (created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_expenses_settled ON expenses (settled);
@@ -185,6 +203,8 @@ CREATE INDEX IF NOT EXISTS idx_trips_created_by_wallet ON trips (created_by_wall
 CREATE INDEX IF NOT EXISTS idx_trips_member_wallets ON trips USING GIN (member_wallets);
 
 CREATE INDEX IF NOT EXISTS idx_trips_accepted_wallets ON trips USING GIN (accepted_wallets);
+
+CREATE INDEX IF NOT EXISTS idx_trips_declined_wallets ON trips USING GIN (declined_wallets);
 -- Indexes for trips
 CREATE INDEX IF NOT EXISTS idx_trips_created_at ON trips (created_at DESC);
 
@@ -493,6 +513,17 @@ USING (
         public.settlex_wallet() = ANY(member_wallets)
         AND public.settlex_wallet() = ANY(accepted_wallets)
     )
+    OR EXISTS (
+        SELECT 1 FROM public.trips t
+        WHERE expenses.id::TEXT = ANY(t.expense_ids)
+          AND (
+              public.settlex_wallet() = t.created_by_wallet
+              OR (
+                  public.settlex_wallet() = ANY(t.member_wallets)
+                  AND public.settlex_wallet() = ANY(t.accepted_wallets)
+              )
+          )
+    )
 );
 
 -- Any authenticated wallet can create an expense (they become the creator)
@@ -518,12 +549,34 @@ USING (
         public.settlex_wallet() = ANY(member_wallets)
         AND public.settlex_wallet() = ANY(accepted_wallets)
     )
+    OR EXISTS (
+        SELECT 1 FROM public.trips t
+        WHERE expenses.id::TEXT = ANY(t.expense_ids)
+          AND (
+              public.settlex_wallet() = t.created_by_wallet
+              OR (
+                  public.settlex_wallet() = ANY(t.member_wallets)
+                  AND public.settlex_wallet() = ANY(t.accepted_wallets)
+              )
+          )
+    )
 )
 WITH CHECK (
     created_by_wallet = public.settlex_wallet()
     OR (
         public.settlex_wallet() = ANY(member_wallets)
         AND public.settlex_wallet() = ANY(accepted_wallets)
+    )
+    OR EXISTS (
+        SELECT 1 FROM public.trips t
+        WHERE expenses.id::TEXT = ANY(t.expense_ids)
+          AND (
+              public.settlex_wallet() = t.created_by_wallet
+              OR (
+                  public.settlex_wallet() = ANY(t.member_wallets)
+                  AND public.settlex_wallet() = ANY(t.accepted_wallets)
+              )
+          )
     )
 );
 
@@ -941,6 +994,7 @@ BEGIN
     );
 
     NEW.accepted_wallets := ARRAY[NEW.created_by_wallet];
+    NEW.declined_wallets := ARRAY[]::TEXT[];
     RETURN NEW;
 END;
 $$;
@@ -1018,6 +1072,7 @@ BEGIN
     END IF;
 
     NEW.accepted_wallets := ARRAY[NEW.created_by_wallet];
+    NEW.declined_wallets := ARRAY[]::TEXT[];
     RETURN NEW;
 END;
 $$;
@@ -1071,12 +1126,21 @@ BEGIN
     -- SECURITY DEFINER so a pending invitee can accept without first receiving
     -- SELECT/UPDATE access to the expense row.
     IF NEW.accepted_wallets IS DISTINCT FROM OLD.accepted_wallets THEN
-        IF v_is_creator
-           OR NOT (v_caller = ANY(OLD.member_wallets))
-           OR v_caller = ANY(OLD.accepted_wallets)
-           OR NOT (OLD.accepted_wallets <@ NEW.accepted_wallets)
-           OR pg_catalog.cardinality(NEW.accepted_wallets) <> pg_catalog.cardinality(OLD.accepted_wallets) + 1
-           OR NOT (v_caller = ANY(NEW.accepted_wallets)) THEN
+        IF (
+            v_is_creator
+            OR NOT (v_caller = ANY(OLD.member_wallets))
+            OR v_caller = ANY(OLD.accepted_wallets)
+            OR NOT (OLD.accepted_wallets <@ NEW.accepted_wallets)
+            OR pg_catalog.cardinality(NEW.accepted_wallets) <> pg_catalog.cardinality(OLD.accepted_wallets) + 1
+            OR NOT (v_caller = ANY(NEW.accepted_wallets))
+        ) AND NOT EXISTS (
+            SELECT 1 FROM public.trips t
+            WHERE NEW.id::TEXT = ANY(t.expense_ids)
+              AND (
+                  v_caller = t.created_by_wallet
+                  OR (v_caller = ANY(t.member_wallets) AND v_caller = ANY(t.accepted_wallets))
+              )
+        ) THEN
             RAISE EXCEPTION 'A wallet may only accept its own pending expense invitation';
         END IF;
 
@@ -1093,6 +1157,34 @@ BEGIN
            OR NEW.created_by_wallet IS DISTINCT FROM OLD.created_by_wallet
            OR NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
             RAISE EXCEPTION 'Accepting an invitation cannot modify the expense';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    -- Declining / leaving an expense
+    IF NEW.declined_wallets IS DISTINCT FROM OLD.declined_wallets THEN
+        IF v_is_creator
+           OR NOT (v_caller = ANY(OLD.member_wallets))
+           OR v_caller = ANY(OLD.declined_wallets)
+           OR NOT (OLD.declined_wallets <@ NEW.declined_wallets)
+           OR pg_catalog.cardinality(NEW.declined_wallets) <> pg_catalog.cardinality(OLD.declined_wallets) + 1
+           OR NOT (v_caller = ANY(NEW.declined_wallets)) THEN
+            RAISE EXCEPTION 'A wallet may only decline its own invitation';
+        END IF;
+
+        IF NEW.title IS DISTINCT FROM OLD.title
+           OR NEW.description IS DISTINCT FROM OLD.description
+           OR NEW.total_amount IS DISTINCT FROM OLD.total_amount
+           OR NEW.currency IS DISTINCT FROM OLD.currency
+           OR NEW.split_mode IS DISTINCT FROM OLD.split_mode
+           OR NEW.paid_by_member_id IS DISTINCT FROM OLD.paid_by_member_id
+           OR NEW.members IS DISTINCT FROM OLD.members
+           OR NEW.shares IS DISTINCT FROM OLD.shares
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at
+           OR NEW.settled IS DISTINCT FROM OLD.settled
+           OR NEW.created_by_wallet IS DISTINCT FROM OLD.created_by_wallet
+           OR NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
+            RAISE EXCEPTION 'Declining an invitation cannot modify the expense';
         END IF;
         RETURN NEW;
     END IF;
@@ -1283,6 +1375,30 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- Declining / leaving a trip
+    IF NEW.declined_wallets IS DISTINCT FROM OLD.declined_wallets THEN
+        IF v_is_creator
+           OR NOT (v_caller = ANY(OLD.member_wallets))
+           OR v_caller = ANY(OLD.declined_wallets)
+           OR NOT (OLD.declined_wallets <@ NEW.declined_wallets)
+           OR pg_catalog.cardinality(NEW.declined_wallets) <> pg_catalog.cardinality(OLD.declined_wallets) + 1
+           OR NOT (v_caller = ANY(NEW.declined_wallets)) THEN
+            RAISE EXCEPTION 'A wallet may only decline or leave its own trip invitation';
+        END IF;
+
+        IF NEW.name IS DISTINCT FROM OLD.name
+           OR NEW.description IS DISTINCT FROM OLD.description
+           OR NEW.members IS DISTINCT FROM OLD.members
+           OR NEW.expense_ids IS DISTINCT FROM OLD.expense_ids
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at
+           OR NEW.settled IS DISTINCT FROM OLD.settled
+           OR NEW.created_by_wallet IS DISTINCT FROM OLD.created_by_wallet
+           OR NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
+            RAISE EXCEPTION 'Declining an invitation cannot modify the trip';
+        END IF;
+        RETURN NEW;
+    END IF;
+
     -- 2. Creator validations
     IF v_is_creator THEN
         IF NOT (OLD.created_by_wallet = ANY(NEW.member_wallets)) THEN
@@ -1404,6 +1520,38 @@ BEFORE INSERT ON trips
 FOR EACH ROW
 EXECUTE FUNCTION validate_trip_insert();
 
+-- Sync trigger to auto-accept trip expenses for accepted trip members
+CREATE OR REPLACE FUNCTION public.sync_trip_expenses_accepted_wallets()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    IF NEW.expense_ids IS NOT NULL AND pg_catalog.array_length(NEW.expense_ids, 1) > 0 THEN
+        UPDATE public.expenses
+        SET accepted_wallets = (
+            SELECT pg_catalog.array_agg(DISTINCT w)
+            FROM pg_catalog.unnest(pg_catalog.array_cat(expenses.accepted_wallets, NEW.accepted_wallets)) AS w
+            WHERE w = ANY(expenses.member_wallets)
+        )
+        WHERE id::TEXT = ANY(NEW.expense_ids)
+          AND NOT (
+              SELECT COALESCE(pg_catalog.array_agg(w), ARRAY[]::TEXT[])
+              FROM pg_catalog.unnest(NEW.accepted_wallets) AS w
+              WHERE w = ANY(expenses.member_wallets)
+          ) <@ expenses.accepted_wallets;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS sync_trip_expenses_accepted_wallets ON trips;
+CREATE TRIGGER sync_trip_expenses_accepted_wallets
+AFTER INSERT OR UPDATE OF expense_ids, accepted_wallets ON trips
+FOR EACH ROW
+EXECUTE FUNCTION sync_trip_expenses_accepted_wallets();
+
 -- Pending invitees cannot SELECT the underlying row. This deliberately narrow
 -- RPC exposes only the information needed to make an informed consent choice.
 CREATE OR REPLACE FUNCTION public.get_pending_invitations()
@@ -1412,7 +1560,9 @@ RETURNS TABLE (
     entity_id UUID,
     title TEXT,
     created_by_wallet TEXT,
-    created_at TIMESTAMPTZ
+    created_at TIMESTAMPTZ,
+    total_amount TEXT,
+    caller_share TEXT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1432,27 +1582,144 @@ BEGIN
         e.id,
         e.title,
         e.created_by_wallet,
-        e.created_at
+        e.created_at,
+        e.total_amount,
+        COALESCE(
+            (
+                SELECT s->>'amount'
+                FROM pg_catalog.jsonb_array_elements(e.shares) AS s
+                WHERE s->>'walletAddress' = v_caller
+                   OR s->>'memberId' IN (
+                       SELECT m->>'id'
+                       FROM pg_catalog.jsonb_array_elements(e.members) AS m
+                       WHERE m->>'walletAddress' = v_caller
+                   )
+                LIMIT 1
+            ),
+            '0'
+        ) AS caller_share
     FROM public.expenses AS e
     WHERE v_caller = ANY(e.member_wallets)
       AND NOT (v_caller = ANY(e.accepted_wallets))
+      AND NOT (v_caller = ANY(e.declined_wallets))
       AND v_caller <> e.created_by_wallet
+      AND NOT EXISTS (
+          SELECT 1 FROM public.trips t
+          WHERE e.id::TEXT = ANY(t.expense_ids)
+            AND (
+                v_caller = t.created_by_wallet
+                OR v_caller = ANY(t.member_wallets)
+            )
+      )
     UNION ALL
     SELECT
         'trip'::TEXT,
         t.id,
         t.name,
         t.created_by_wallet,
-        t.created_at
+        t.created_at,
+        COALESCE(
+            (
+                SELECT COALESCE(pg_catalog.sum((exp.total_amount)::numeric), 0)::TEXT
+                FROM public.expenses exp
+                WHERE exp.id::TEXT = ANY(t.expense_ids)
+            ),
+            '0'
+        ) AS total_amount,
+        COALESCE(
+            (
+                SELECT COALESCE(
+                    pg_catalog.sum(
+                        (
+                            COALESCE(
+                                (
+                                    SELECT s->>'amount'
+                                    FROM pg_catalog.jsonb_array_elements(exp.shares) AS s
+                                    WHERE s->>'walletAddress' = v_caller
+                                       OR s->>'memberId' IN (
+                                           SELECT m->>'id'
+                                           FROM pg_catalog.jsonb_array_elements(exp.members) AS m
+                                           WHERE m->>'walletAddress' = v_caller
+                                       )
+                                    LIMIT 1
+                                ),
+                                '0'
+                            )
+                        )::numeric
+                    ),
+                    0
+                )::TEXT
+                FROM public.expenses exp
+                WHERE exp.id::TEXT = ANY(t.expense_ids)
+            ),
+            '0'
+        ) AS caller_share
     FROM public.trips AS t
     WHERE v_caller = ANY(t.member_wallets)
       AND NOT (v_caller = ANY(t.accepted_wallets))
+      AND NOT (v_caller = ANY(t.declined_wallets))
       AND v_caller <> t.created_by_wallet
     ORDER BY created_at DESC;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION public.accept_invitation(
+    p_entity_type TEXT,
+    p_entity_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+    v_caller TEXT;
+    v_updated_id UUID;
+    v_trip_expense_ids TEXT[];
+BEGIN
+    v_caller := public.settlex_wallet();
+    IF v_caller IS NULL THEN
+        RAISE EXCEPTION 'Not authenticated';
+    END IF;
+
+    IF p_entity_type = 'expense' THEN
+        UPDATE public.expenses
+        SET accepted_wallets = pg_catalog.array_append(accepted_wallets, v_caller)
+        WHERE id = p_entity_id
+          AND v_caller = ANY(member_wallets)
+          AND NOT (v_caller = ANY(accepted_wallets))
+          AND NOT (v_caller = ANY(declined_wallets))
+          AND v_caller <> created_by_wallet
+        RETURNING id INTO v_updated_id;
+    ELSIF p_entity_type = 'trip' THEN
+        UPDATE public.trips
+        SET accepted_wallets = pg_catalog.array_append(accepted_wallets, v_caller)
+        WHERE id = p_entity_id
+          AND v_caller = ANY(member_wallets)
+          AND NOT (v_caller = ANY(accepted_wallets))
+          AND NOT (v_caller = ANY(declined_wallets))
+          AND v_caller <> created_by_wallet
+        RETURNING id, expense_ids INTO v_updated_id, v_trip_expense_ids;
+
+        -- Auto-accept all trip expenses for this caller
+        IF v_trip_expense_ids IS NOT NULL AND pg_catalog.array_length(v_trip_expense_ids, 1) > 0 THEN
+            UPDATE public.expenses
+            SET accepted_wallets = pg_catalog.array_append(accepted_wallets, v_caller)
+            WHERE id::TEXT = ANY(v_trip_expense_ids)
+              AND v_caller = ANY(member_wallets)
+              AND NOT (v_caller = ANY(accepted_wallets));
+        END IF;
+    ELSE
+        RAISE EXCEPTION 'Unknown invitation type';
+    END IF;
+
+    IF v_updated_id IS NULL THEN
+        RAISE EXCEPTION 'Pending invitation not found';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.decline_invitation(
     p_entity_type TEXT,
     p_entity_id UUID
 )
@@ -1472,18 +1739,20 @@ BEGIN
 
     IF p_entity_type = 'expense' THEN
         UPDATE public.expenses
-        SET accepted_wallets = pg_catalog.array_append(accepted_wallets, v_caller)
+        SET declined_wallets = pg_catalog.array_append(declined_wallets, v_caller),
+            accepted_wallets = pg_catalog.array_remove(accepted_wallets, v_caller)
         WHERE id = p_entity_id
           AND v_caller = ANY(member_wallets)
-          AND NOT (v_caller = ANY(accepted_wallets))
+          AND NOT (v_caller = ANY(declined_wallets))
           AND v_caller <> created_by_wallet
         RETURNING id INTO v_updated_id;
     ELSIF p_entity_type = 'trip' THEN
         UPDATE public.trips
-        SET accepted_wallets = pg_catalog.array_append(accepted_wallets, v_caller)
+        SET declined_wallets = pg_catalog.array_append(declined_wallets, v_caller),
+            accepted_wallets = pg_catalog.array_remove(accepted_wallets, v_caller)
         WHERE id = p_entity_id
           AND v_caller = ANY(member_wallets)
-          AND NOT (v_caller = ANY(accepted_wallets))
+          AND NOT (v_caller = ANY(declined_wallets))
           AND v_caller <> created_by_wallet
         RETURNING id INTO v_updated_id;
     ELSE
@@ -1496,10 +1765,27 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.leave_trip(
+    p_trip_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    PERFORM public.decline_invitation('trip', p_trip_id);
+END;
+$$;
+
 REVOKE ALL ON FUNCTION public.get_pending_invitations() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.accept_invitation(TEXT, UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.decline_invitation(TEXT, UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.leave_trip(UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_pending_invitations() TO authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.accept_invitation(TEXT, UUID) TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.decline_invitation(TEXT, UUID) TO authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.leave_trip(UUID) TO authenticated, anon;
 
 -- ============================================================================
 -- 5.6. ATOMIC RPC FUNCTION FOR MARKING SHARES PAID (Concurrency-Safe & Authenticated)
@@ -1551,7 +1837,18 @@ BEGIN
     END IF;
 
     IF v_caller_wallet <> v_creator_wallet
-       AND NOT (v_caller_wallet = ANY(v_accepted_wallets)) THEN
+       AND NOT (v_caller_wallet = ANY(v_accepted_wallets))
+       AND NOT EXISTS (
+           SELECT 1 FROM public.trips t
+           WHERE p_expense_id::TEXT = ANY(t.expense_ids)
+             AND (
+                 v_caller_wallet = t.created_by_wallet
+                 OR (
+                     v_caller_wallet = ANY(t.member_wallets)
+                     AND v_caller_wallet = ANY(t.accepted_wallets)
+                 )
+             )
+       ) THEN
         RAISE EXCEPTION 'Accept the expense invitation before recording a payment';
     END IF;
 
