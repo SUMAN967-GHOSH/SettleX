@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS trips (
   declined_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[] -- Members who declined/left
 );
 
+-- Create payments table (for replay prevention and payment auditing SX-028)
+CREATE TABLE IF NOT EXISTS payments (
+    tx_hash TEXT PRIMARY KEY,
+    expense_id UUID NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+    member_id TEXT NOT NULL,
+    paid_by_wallet TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
 -- ============================================================================
 -- 1.5. ADD WALLET COLUMNS (if tables already exist from previous setup)
 -- ============================================================================
@@ -107,11 +116,6 @@ BEGIN
         WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name = 'accepted_wallets'
     ) THEN
         ALTER TABLE expenses ADD COLUMN accepted_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
-        -- Existing rows were created before consent existed. Keep them visible
-        -- only to their creator until each invited wallet explicitly accepts.
-        UPDATE expenses
-        SET accepted_wallets = ARRAY[created_by_wallet]
-        WHERE created_by_wallet <> '';
     END IF;
 
     IF NOT EXISTS (
@@ -160,11 +164,6 @@ END $$;
 -- Update users table schema (make display_name required, remove email if exists)
 DO $$ 
 BEGIN
-    -- Set default value for any existing NULL display_name values (only if rows exist)
-    IF EXISTS (SELECT 1 FROM users LIMIT 1) THEN
-        UPDATE users SET display_name = 'User' WHERE display_name IS NULL OR display_name = '';
-    END IF;
-    
     -- Make display_name NOT NULL if it's currently nullable
     IF EXISTS (
         SELECT 1 FROM information_schema.columns 
@@ -186,11 +185,6 @@ END $$;
 DO $$ 
 BEGIN
     -- users table constraints
-    IF EXISTS (SELECT 1 FROM users LIMIT 1) THEN
-        UPDATE users SET display_name = 'User' WHERE display_name IS NULL OR display_name = '';
-        UPDATE users SET display_name = SUBSTRING(display_name FROM 1 FOR 50) WHERE char_length(display_name) > 50;
-    END IF;
-
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
         WHERE conrelid = 'users'::regclass AND contype = 'c' AND conname = 'users_display_name_check'
@@ -200,11 +194,6 @@ BEGIN
     END IF;
 
     -- expenses table constraints
-    IF EXISTS (SELECT 1 FROM expenses LIMIT 1) THEN
-        UPDATE expenses SET title = SUBSTRING(title FROM 1 FOR 120) WHERE char_length(title) > 120;
-        UPDATE expenses SET description = SUBSTRING(description FROM 1 FOR 100) WHERE char_length(description) > 100;
-    END IF;
-
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
         WHERE conrelid = 'expenses'::regclass AND contype = 'c' AND conname = 'expenses_title_check'
@@ -238,11 +227,6 @@ BEGIN
     END IF;
 
     -- trips table constraints
-    IF EXISTS (SELECT 1 FROM trips LIMIT 1) THEN
-        UPDATE trips SET name = SUBSTRING(name FROM 1 FOR 120) WHERE char_length(name) > 120;
-        UPDATE trips SET description = SUBSTRING(description FROM 1 FOR 100) WHERE char_length(description) > 100;
-    END IF;
-
     IF NOT EXISTS (
         SELECT 1 FROM pg_constraint 
         WHERE conrelid = 'trips'::regclass AND contype = 'c' AND conname = 'trips_name_check'
@@ -274,6 +258,10 @@ END $$;
 
 -- Indexes for users
 CREATE INDEX IF NOT EXISTS idx_users_wallet_address ON users (wallet_address);
+
+-- Indexes for payments (SX-028)
+CREATE INDEX IF NOT EXISTS idx_payments_expense_id ON payments (expense_id);
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 
 CREATE INDEX IF NOT EXISTS idx_users_created_at ON users (created_at DESC);
 
@@ -728,6 +716,35 @@ FOR DELETE
 USING (
     created_by_wallet = public.settlex_wallet()
 );
+
+-- Payments policies (SX-028)
+DROP POLICY IF EXISTS "Members can view payments for their expenses" ON payments;
+CREATE POLICY "Members can view payments for their expenses" ON payments
+    FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM expenses e
+            WHERE e.id = payments.expense_id
+              AND (
+                  public.settlex_wallet() = e.created_by_wallet
+                  OR (
+                      public.settlex_wallet() = ANY(e.member_wallets)
+                      AND public.settlex_wallet() = ANY(e.accepted_wallets)
+                  )
+                  OR EXISTS (
+                      SELECT 1 FROM trips t
+                      WHERE e.id::TEXT = ANY(t.expense_ids)
+                        AND (
+                            public.settlex_wallet() = t.created_by_wallet
+                            OR (
+                                public.settlex_wallet() = ANY(t.member_wallets)
+                                AND public.settlex_wallet() = ANY(t.accepted_wallets)
+                            )
+                        )
+                  )
+              )
+        )
+    );
 
 -- ============================================================================
 -- 4. ENABLE REALTIME (for live updates across browsers)
@@ -1197,6 +1214,8 @@ DECLARE
     v_idx INTEGER;
     v_all_paid BOOLEAN := true;
     v_share_elem JSONB;
+    v_has_paid_share BOOLEAN := false;
+    v_via_rpc BOOLEAN := false;
 BEGIN
     v_caller := public.settlex_wallet();
     
@@ -1223,6 +1242,7 @@ BEGIN
     END IF;
 
     v_is_creator := (v_caller = OLD.created_by_wallet);
+    v_via_rpc := (COALESCE(current_setting('settlex.via_rpc', true), 'off') = 'on');
 
     -- Acceptance is an append-only, self-service transition. The RPC below is
     -- SECURITY DEFINER so a pending invitee can accept without first receiving
@@ -1291,112 +1311,167 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- 2. Creator validations
+    -- 2. Creator validations (SX-026: No early return)
     IF v_is_creator THEN
         -- Creator cannot drop themselves from member_wallets
         IF NOT (OLD.created_by_wallet = ANY(NEW.member_wallets)) THEN
             RAISE EXCEPTION 'Creator cannot be removed from member_wallets';
         END IF;
-        RETURN NEW;
-    END IF;
 
-    -- 3. Non-creator member validations: protect sensitive columns from tampering
-    IF NEW.title <> OLD.title THEN
-        RAISE EXCEPTION 'Only the expense creator can modify title';
-    END IF;
+        SELECT EXISTS (
+            SELECT 1 FROM jsonb_array_elements(OLD.shares) AS s
+            WHERE COALESCE((s->>'paid')::boolean, false) = true
+        ) INTO v_has_paid_share;
 
-    IF NEW.description IS DISTINCT FROM OLD.description THEN
-        RAISE EXCEPTION 'Only the expense creator can modify description';
-    END IF;
-
-    IF NEW.total_amount <> OLD.total_amount THEN
-        RAISE EXCEPTION 'Only the expense creator can modify total_amount';
-    END IF;
-
-    IF NEW.currency <> OLD.currency THEN
-        RAISE EXCEPTION 'Only the expense creator can modify currency';
-    END IF;
-
-    IF NEW.split_mode <> OLD.split_mode THEN
-        RAISE EXCEPTION 'Only the expense creator can modify split_mode';
-    END IF;
-
-    IF NEW.paid_by_member_id <> OLD.paid_by_member_id THEN
-        RAISE EXCEPTION 'Only the expense creator can modify paid_by_member_id';
-    END IF;
-
-    IF NEW.members IS DISTINCT FROM OLD.members THEN
-        RAISE EXCEPTION 'Only the expense creator can modify members';
-    END IF;
-
-    IF NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
-        RAISE EXCEPTION 'Only the expense creator can modify member_wallets';
-    END IF;
-
-    -- Non-creators modifying shares: can ONLY mark their own share as paid (paid: false -> true) with valid txHash
-    IF NEW.shares IS DISTINCT FROM OLD.shares THEN
-        v_old_shares_count := jsonb_array_length(OLD.shares);
-        v_new_shares_count := jsonb_array_length(NEW.shares);
-
-        IF v_old_shares_count <> v_new_shares_count THEN
-            RAISE EXCEPTION 'Cannot add or remove shares';
-        END IF;
-
-        FOR v_idx IN 0 .. (v_old_shares_count - 1) LOOP
-            v_old_share := OLD.shares->v_idx;
-            v_new_share := NEW.shares->v_idx;
-
-            IF v_old_share IS DISTINCT FROM v_new_share THEN
-                v_diff_count := v_diff_count + 1;
-
-                -- Must be caller's own share (matches walletAddress on share or in members array)
-                IF COALESCE(v_old_share->>'walletAddress', '') <> v_caller THEN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM jsonb_array_elements(OLD.members) AS m
-                        WHERE m->>'id' = v_old_share->>'memberId'
-                          AND m->>'walletAddress' = v_caller
-                    ) THEN
-                        RAISE EXCEPTION 'Cannot modify shares belonging to other members';
-                    END IF;
-                END IF;
-
-                -- Immutable fields within the share: memberId, amount, currency, shareType, weight, percentage
-                IF (v_old_share->>'memberId') IS DISTINCT FROM (v_new_share->>'memberId') OR
-                   (v_old_share->>'amount') IS DISTINCT FROM (v_new_share->>'amount') OR
-                   (v_old_share->>'currency') IS DISTINCT FROM (v_new_share->>'currency') OR
-                   (v_old_share->>'shareType') IS DISTINCT FROM (v_new_share->>'shareType') OR
-                   (v_old_share->>'weight') IS DISTINCT FROM (v_new_share->>'weight') OR
-                   (v_old_share->>'percentage') IS DISTINCT FROM (v_new_share->>'percentage') THEN
-                    RAISE EXCEPTION 'Cannot modify share amounts or split allocation';
-                END IF;
-
-                -- Valid status transition: paid false -> true only
-                IF COALESCE((v_old_share->>'paid')::boolean, false) = true AND
-                   COALESCE((v_new_share->>'paid')::boolean, false) = false THEN
-                    RAISE EXCEPTION 'Cannot unmark a paid share';
-                END IF;
-
-                IF COALESCE((v_new_share->>'paid')::boolean, false) = true THEN
-                    IF v_new_share->>'txHash' IS NULL OR NOT (v_new_share->>'txHash' ~ '^[0-9a-f]{64}$') THEN
-                        RAISE EXCEPTION 'Valid transaction hash is required when marking share as paid';
-                    END IF;
-                    IF EXISTS (
-                        SELECT 1 FROM jsonb_array_elements(NEW.shares) AS s
-                        WHERE s->>'memberId' != v_new_share->>'memberId'
-                        AND s->>'txHash' = v_new_share->>'txHash'
-                    ) THEN
-                        RAISE EXCEPTION 'Transaction hash already used on another share';
-                    END IF;
-                END IF;
+        -- Freeze amounts, currency, split_mode, paid_by_member_id, members once any share is paid (SX-026)
+        IF v_has_paid_share THEN
+            IF NEW.total_amount IS DISTINCT FROM OLD.total_amount
+               OR NEW.currency IS DISTINCT FROM OLD.currency
+               OR NEW.split_mode IS DISTINCT FROM OLD.split_mode
+               OR NEW.paid_by_member_id IS DISTINCT FROM OLD.paid_by_member_id
+               OR NEW.members IS DISTINCT FROM OLD.members
+               OR NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
+                RAISE EXCEPTION 'Cannot modify financial terms or members once shares have been paid';
             END IF;
-        END LOOP;
+        END IF;
 
-        IF v_diff_count > 1 THEN
-            RAISE EXCEPTION 'Cannot modify multiple shares at once';
+        -- Creator cannot directly modify shares unless through mark_share_paid RPC (SX-026)
+        IF NEW.shares IS DISTINCT FROM OLD.shares AND NOT v_via_rpc THEN
+            RAISE EXCEPTION 'Expense creator cannot directly modify shares; use mark_share_paid';
+        END IF;
+
+        -- Re-validate allocation when payload modified without paid shares (SX-026)
+        IF NOT v_has_paid_share AND NOT v_via_rpc THEN
+            PERFORM public.assert_valid_expense_payload(
+                NEW.total_amount,
+                NEW.currency,
+                NEW.split_mode,
+                NEW.paid_by_member_id,
+                NEW.members,
+                NEW.shares,
+                NEW.created_by_wallet,
+                NEW.member_wallets
+            );
+        END IF;
+    ELSE
+        -- 3. Non-creator member validations: protect sensitive columns from tampering (SX-030)
+        IF NEW.title <> OLD.title THEN
+            RAISE EXCEPTION 'Only the expense creator can modify title';
+        END IF;
+
+        IF NEW.description IS DISTINCT FROM OLD.description THEN
+            RAISE EXCEPTION 'Only the expense creator can modify description';
+        END IF;
+
+        IF NEW.total_amount <> OLD.total_amount THEN
+            RAISE EXCEPTION 'Only the expense creator can modify total_amount';
+        END IF;
+
+        IF NEW.currency <> OLD.currency THEN
+            RAISE EXCEPTION 'Only the expense creator can modify currency';
+        END IF;
+
+        IF NEW.split_mode <> OLD.split_mode THEN
+            RAISE EXCEPTION 'Only the expense creator can modify split_mode';
+        END IF;
+
+        IF NEW.paid_by_member_id <> OLD.paid_by_member_id THEN
+            RAISE EXCEPTION 'Only the expense creator can modify paid_by_member_id';
+        END IF;
+
+        IF NEW.members IS DISTINCT FROM OLD.members THEN
+            RAISE EXCEPTION 'Only the expense creator can modify members';
+        END IF;
+
+        IF NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
+            RAISE EXCEPTION 'Only the expense creator can modify member_wallets';
+        END IF;
+
+        -- Non-creator version check: must be OLD.version + 1 (SX-030)
+        IF NEW.version IS DISTINCT FROM OLD.version THEN
+            IF NEW.version <> OLD.version + 1 THEN
+                RAISE EXCEPTION 'Version must increment by exactly 1';
+            END IF;
+        END IF;
+
+        -- Non-creators modifying shares: can ONLY mark their own share as paid (paid: false -> true) with valid txHash (SX-030)
+        IF NEW.shares IS DISTINCT FROM OLD.shares THEN
+            v_old_shares_count := jsonb_array_length(OLD.shares);
+            v_new_shares_count := jsonb_array_length(NEW.shares);
+
+            IF v_old_shares_count <> v_new_shares_count THEN
+                RAISE EXCEPTION 'Cannot add or remove shares';
+            END IF;
+
+            FOR v_idx IN 0 .. (v_old_shares_count - 1) LOOP
+                v_old_share := OLD.shares->v_idx;
+                v_new_share := NEW.shares->v_idx;
+
+                IF v_old_share IS DISTINCT FROM v_new_share THEN
+                    v_diff_count := v_diff_count + 1;
+
+                    -- Must be caller's own share (matches walletAddress on share or in members array)
+                    IF COALESCE(v_old_share->>'walletAddress', '') <> v_caller THEN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM jsonb_array_elements(OLD.members) AS m
+                            WHERE m->>'id' = v_old_share->>'memberId'
+                              AND m->>'walletAddress' = v_caller
+                        ) THEN
+                            RAISE EXCEPTION 'Cannot modify shares belonging to other members';
+                        END IF;
+                    END IF;
+
+                    -- Immutable fields within the share (SX-030)
+                    IF (v_old_share->>'memberId') IS DISTINCT FROM (v_new_share->>'memberId') OR
+                       (v_old_share->>'walletAddress') IS DISTINCT FROM (v_new_share->>'walletAddress') OR
+                       (v_old_share->>'name') IS DISTINCT FROM (v_new_share->>'name') OR
+                       (v_old_share->>'amount') IS DISTINCT FROM (v_new_share->>'amount') OR
+                       (v_old_share->>'currency') IS DISTINCT FROM (v_new_share->>'currency') OR
+                       (v_old_share->>'shareType') IS DISTINCT FROM (v_new_share->>'shareType') OR
+                       (v_old_share->>'weight') IS DISTINCT FROM (v_new_share->>'weight') OR
+                       (v_old_share->>'percentage') IS DISTINCT FROM (v_new_share->>'percentage') THEN
+                        RAISE EXCEPTION 'Cannot modify share attributes or allocation';
+                    END IF;
+
+                    -- Cannot forge paidBy address (SX-030)
+                    IF (v_new_share->>'paidBy') IS NOT NULL AND (v_new_share->>'paidBy') <> v_caller THEN
+                        RAISE EXCEPTION 'Cannot forge paidBy address';
+                    END IF;
+
+                    -- Valid status transition: paid false -> true only
+                    IF COALESCE((v_old_share->>'paid')::boolean, false) = true AND
+                       COALESCE((v_new_share->>'paid')::boolean, false) = false THEN
+                        RAISE EXCEPTION 'Cannot unmark a paid share';
+                    END IF;
+
+                    IF COALESCE((v_new_share->>'paid')::boolean, false) = true THEN
+                        IF v_new_share->>'txHash' IS NULL OR NOT (v_new_share->>'txHash' ~ '^[0-9a-f]{64}$') THEN
+                            RAISE EXCEPTION 'Valid transaction hash is required when marking share as paid';
+                        END IF;
+                        -- Global uniqueness check in payments table (SX-028)
+                        IF EXISTS (
+                            SELECT 1 FROM public.payments WHERE tx_hash = v_new_share->>'txHash'
+                        ) THEN
+                            RAISE EXCEPTION 'Transaction hash already used on another payment';
+                        END IF;
+                        IF EXISTS (
+                            SELECT 1 FROM jsonb_array_elements(NEW.shares) AS s
+                            WHERE s->>'memberId' != v_new_share->>'memberId'
+                            AND s->>'txHash' = v_new_share->>'txHash'
+                        ) THEN
+                            RAISE EXCEPTION 'Transaction hash already used on another share';
+                        END IF;
+                    END IF;
+                END IF;
+            END LOOP;
+
+            IF v_diff_count > 1 THEN
+                RAISE EXCEPTION 'Cannot modify multiple shares at once';
+            END IF;
         END IF;
     END IF;
 
-    -- Validate settled consistency
+    -- Validate settled consistency for ALL callers (SX-026)
     IF NEW.settled IS DISTINCT FROM OLD.settled THEN
         FOR v_share_elem IN SELECT * FROM jsonb_array_elements(NEW.shares) LOOP
             IF COALESCE((v_share_elem->>'paid')::boolean, false) = false THEN
@@ -1454,6 +1529,7 @@ BEGIN
 
     v_is_creator := (v_caller = OLD.created_by_wallet);
 
+    -- Acceptance is an append-only, self-service transition
     IF NEW.accepted_wallets IS DISTINCT FROM OLD.accepted_wallets THEN
         IF v_is_creator
            OR NOT (v_caller = ANY(OLD.member_wallets))
@@ -1501,50 +1577,100 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- 2. Creator validations
+    -- 2. Creator validations (SX-027: No early return)
     IF v_is_creator THEN
         IF NOT (OLD.created_by_wallet = ANY(NEW.member_wallets)) THEN
             RAISE EXCEPTION 'Creator cannot be removed from member_wallets';
         END IF;
-        RETURN NEW;
+
+        IF NEW.members IS DISTINCT FROM OLD.members OR NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
+            IF jsonb_typeof(NEW.members) <> 'array'
+               OR jsonb_array_length(NEW.members) < 2 THEN
+                RAISE EXCEPTION 'A trip requires at least two members';
+            END IF;
+            IF EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(NEW.members) AS m
+                WHERE COALESCE(m->>'id', '') = ''
+                   OR COALESCE(m->>'name', '') = ''
+                   OR char_length(m->>'name') > 50
+                   OR COALESCE(m->>'walletAddress', '') !~ '^G[A-Z2-7]{55}$'
+            ) OR (
+                SELECT count(*) <> count(DISTINCT m->>'id')
+                FROM jsonb_array_elements(NEW.members) AS m
+            ) OR (
+                SELECT count(*) <> count(DISTINCT m->>'walletAddress')
+                FROM jsonb_array_elements(NEW.members) AS m
+            ) THEN
+                RAISE EXCEPTION 'Trip members require unique ids, names, and valid Stellar wallets';
+            END IF;
+        END IF;
+    ELSE
+        -- 3. Non-creator member validations
+        IF NEW.name <> OLD.name THEN
+            RAISE EXCEPTION 'Only trip creator can modify trip name';
+        END IF;
+
+        IF NEW.description IS DISTINCT FROM OLD.description THEN
+            RAISE EXCEPTION 'Only trip creator can modify trip description';
+        END IF;
+
+        IF NEW.members IS DISTINCT FROM OLD.members THEN
+            RAISE EXCEPTION 'Only trip creator can modify trip members';
+        END IF;
+
+        IF NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
+            RAISE EXCEPTION 'Only trip creator can modify member_wallets';
+        END IF;
     END IF;
 
-    -- 3. Non-creator member validations
-    IF NEW.name <> OLD.name THEN
-        RAISE EXCEPTION 'Only trip creator can modify trip name';
+    -- Check expense_ids modifications for ALL callers (SX-027 & SX-029)
+    IF NEW.expense_ids IS DISTINCT FROM OLD.expense_ids THEN
+        IF NOT (OLD.expense_ids <@ NEW.expense_ids) THEN
+            RAISE EXCEPTION 'Cannot remove existing expenses from trip';
+        END IF;
+
+        -- Must be valid UUID format (SX-029)
+        IF EXISTS (
+            SELECT 1 FROM unnest(NEW.expense_ids) AS eid
+            WHERE eid !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ) THEN
+            RAISE EXCEPTION 'Invalid expense ID in trip: must be a valid UUID';
+        END IF;
+
+        -- Newly appended expense ids must exist and caller must be a member of them (SX-029)
+        IF EXISTS (
+            SELECT 1 FROM unnest(NEW.expense_ids) AS eid
+            WHERE NOT (eid = ANY(OLD.expense_ids))
+              AND NOT EXISTS (
+                  SELECT 1 FROM public.expenses e
+                  WHERE e.id::TEXT = eid
+                    AND (
+                        v_caller = e.created_by_wallet
+                        OR (v_caller = ANY(e.member_wallets) AND v_caller = ANY(e.accepted_wallets))
+                    )
+              )
+        ) THEN
+            RAISE EXCEPTION 'Cannot link foreign expense or expense caller does not belong to';
+        END IF;
     END IF;
 
-    IF NEW.description IS DISTINCT FROM OLD.description THEN
-        RAISE EXCEPTION 'Only trip creator can modify trip description';
-    END IF;
-
-    IF NEW.members IS DISTINCT FROM OLD.members THEN
-        RAISE EXCEPTION 'Only trip creator can modify trip members';
-    END IF;
-
-    IF NEW.member_wallets IS DISTINCT FROM OLD.member_wallets THEN
-        RAISE EXCEPTION 'Only trip creator can modify member_wallets';
-    END IF;
-
-    -- Non-creators cannot remove existing expense ids
-    IF NOT (OLD.expense_ids <@ NEW.expense_ids) THEN
-        RAISE EXCEPTION 'Cannot remove existing expenses from trip';
-    END IF;
-
-    -- Settled status transition check
+    -- Settled status transition check for ALL callers (SX-027)
     IF NEW.settled IS DISTINCT FROM OLD.settled THEN
         IF OLD.settled = true AND NEW.settled = false THEN
             RAISE EXCEPTION 'Cannot reopen a settled trip';
         END IF;
 
         IF NEW.settled = true THEN
-            IF array_length(OLD.expense_ids, 1) > 0 THEN
-                SELECT COUNT(*) INTO v_unsettled_count
-                FROM public.expenses
-                WHERE id = ANY(OLD.expense_ids::UUID[]) AND settled = false;
+            IF cardinality(NEW.expense_ids) > 0 THEN
+                SELECT count(*)
+                INTO v_unsettled_count
+                FROM public.expenses e
+                WHERE e.id::TEXT = ANY(NEW.expense_ids)
+                  AND e.settled = false;
 
                 IF v_unsettled_count > 0 THEN
-                    RAISE EXCEPTION 'Cannot mark trip as settled when linked expenses are still unpaid';
+                    RAISE EXCEPTION 'Cannot settle trip while linked expenses remain unsettled';
                 END IF;
             END IF;
         END IF;
@@ -1917,6 +2043,7 @@ DECLARE
     v_is_authorized BOOLEAN := false;
     v_target_found BOOLEAN := false;
     v_share_elem JSONB;
+    v_share_is_paid BOOLEAN := false;
 BEGIN
     v_caller_wallet := public.settlex_wallet();
     IF v_caller_wallet IS NULL THEN
@@ -1925,6 +2052,13 @@ BEGIN
 
     IF p_tx_hash IS NULL OR NOT (p_tx_hash ~ '^[0-9a-f]{64}$') THEN
         RAISE EXCEPTION 'Valid transaction hash is required to mark a share as paid';
+    END IF;
+
+    -- Global uniqueness check across all expenses (SX-028)
+    IF EXISTS (
+        SELECT 1 FROM public.payments WHERE tx_hash = p_tx_hash
+    ) THEN
+        RAISE EXCEPTION 'Transaction hash already used on another payment';
     END IF;
 
     -- Lock the expense row for update to eliminate race conditions
@@ -1970,8 +2104,14 @@ BEGIN
     FOR v_share_elem IN SELECT * FROM jsonb_array_elements(v_current_shares) LOOP
         IF v_share_elem->>'memberId' = p_member_id THEN
             v_target_found := true;
+            v_share_is_paid := COALESCE((v_share_elem->>'paid')::boolean, false);
             v_target_wallet := v_share_elem->>'walletAddress';
             
+            -- Prevent re-marking an already-paid share (SX-028)
+            IF v_share_is_paid THEN
+                RAISE EXCEPTION 'Share is already marked as paid';
+            END IF;
+
             -- If share doesn't have walletAddress directly, look up from members array
             IF v_target_wallet IS NULL OR v_target_wallet = '' THEN
                 SELECT m->>'walletAddress' INTO v_target_wallet
@@ -1992,6 +2132,13 @@ BEGIN
     IF NOT v_is_authorized THEN
         RAISE EXCEPTION 'Not authorized to mark this share as paid';
     END IF;
+
+    -- Record payment globally (SX-028)
+    INSERT INTO public.payments (tx_hash, expense_id, member_id, paid_by_wallet)
+    VALUES (p_tx_hash, p_expense_id, p_member_id, v_caller_wallet);
+
+    -- Set transaction-level GUC to allow trigger to permit share update via RPC (SX-026)
+    PERFORM set_config('settlex.via_rpc', 'on', true);
 
     -- Atomically transform the specific member share inside the JSONB array
     SELECT 
@@ -2214,37 +2361,3 @@ EXECUTE ON FUNCTION public.auth_consume_nonce (TEXT, TIMESTAMPTZ) TO service_rol
 GRANT
 EXECUTE ON FUNCTION public.auth_rate_limit (TEXT, INTEGER, INTEGER) TO service_role;
 
--- ============================================================================
--- 6. VERIFICATION QUERIES (Optional - Run to verify setup)
--- ============================================================================
-
--- Check tables exist
-SELECT table_name
-FROM information_schema.tables
-WHERE
-    table_schema = 'public'
-    AND table_name IN (
-        'users',
-        'expenses',
-        'trips',
-        'auth_nonces',
-        'auth_rate_limits'
-    );
-
--- Check indexes exist
-SELECT indexname
-FROM pg_indexes
-WHERE
-    tablename IN ('users', 'expenses', 'trips');
-
--- Check RLS is enabled
-SELECT tablename, rowsecurity
-FROM pg_tables
-WHERE
-    tablename IN ('users', 'expenses', 'trips');
-
--- Check policies exist
-SELECT tablename, policyname
-FROM pg_policies
-WHERE
-    tablename IN ('users', 'expenses', 'trips');
