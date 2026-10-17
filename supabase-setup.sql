@@ -1010,7 +1010,7 @@ BEGIN
     IF p_split_mode = 'custom' AND EXISTS (
         SELECT 1
         FROM pg_catalog.jsonb_array_elements(p_members) AS m
-        WHERE COALESCE(m->>'weight', '') !~ '^[1-9][0-9]{0,2}$'
+        WHERE COALESCE(m->>'weight', '') !~ '^[1-9][0-9]{0,3}$'
            OR (m->>'weight')::INTEGER > 1000
     ) THEN
         RAISE EXCEPTION 'Custom split weights must be integers from 1 to 1000';

@@ -5,24 +5,22 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Trash2, Zap, Users, ChevronDown } from "lucide-react";
 import { Input, Textarea } from "@/components/ui/Input";
 import { SplitCalculator } from "./SplitCalculator";
-import { calculateSplit, isValidXLMAmount, isValidStellarAddress, stroopsToXlm, xlmToStroops } from "@/lib/split/calculator";
+import {
+  calculateSplit,
+  isValidXLMAmount,
+  isValidStellarAddress,
+  isValidSplitWeight,
+  MIN_SPLIT_WEIGHT,
+  MAX_SPLIT_WEIGHT,
+  stroopsToXlm,
+  xlmToStroops,
+} from "@/lib/split/calculator";
 import { useExpense } from "@/hooks/useExpense";
 import { useToast } from "@/components/ui/Toast";
 import { AuthContext } from "@/context/AuthContext";
 import type { Expense, ExpenseFormData, Member, SplitMode } from "@/types/expense";
 
-const MIN_SPLIT_WEIGHT = 1;
-const MAX_SPLIT_WEIGHT = 1000;
 const MAX_MEMBERS = 50;
-
-function isValidSplitWeight(weight: number | undefined): weight is number {
-  return (
-    typeof weight === "number" &&
-    Number.isInteger(weight) &&
-    weight >= MIN_SPLIT_WEIGHT &&
-    weight <= MAX_SPLIT_WEIGHT
-  );
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
