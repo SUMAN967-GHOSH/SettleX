@@ -918,6 +918,8 @@ EXECUTE FUNCTION update_updated_at_column();
 -- The weighted calculation below therefore verifies every stored share against
 -- the same exact-stroop allocation used by the client, which also proves that
 -- stored shares plus the payer's allocation reconcile to total_amount.
+DROP FUNCTION IF EXISTS public.assert_valid_expense_payload(TEXT, TEXT, TEXT, TEXT, JSONB, JSONB, TEXT, TEXT[]);
+
 CREATE OR REPLACE FUNCTION public.assert_valid_expense_payload(
     p_total_amount TEXT,
     p_currency TEXT,
@@ -926,11 +928,12 @@ CREATE OR REPLACE FUNCTION public.assert_valid_expense_payload(
     p_members JSONB,
     p_shares JSONB,
     p_created_by_wallet TEXT,
-    p_member_wallets TEXT[]
+    p_member_wallets TEXT[],
+    p_allow_paid BOOLEAN DEFAULT false
 )
 RETURNS VOID
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
@@ -1016,6 +1019,26 @@ BEGIN
         RAISE EXCEPTION 'Every non-payer must have exactly one expense share';
     END IF;
 
+    IF p_allow_paid THEN
+        IF EXISTS (
+            SELECT 1
+            FROM pg_catalog.jsonb_array_elements(p_shares) AS s
+            WHERE (COALESCE((s->>'paid')::boolean, false) = true)
+              AND (s->>'txHash' IS NULL OR s->>'txHash' !~ '^[0-9a-f]{64}$')
+        ) THEN
+            RAISE EXCEPTION 'Valid transaction hash is required when marking share as paid';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM pg_catalog.jsonb_array_elements(p_shares) AS s
+            WHERE (COALESCE((s->>'paid')::boolean, false) = false)
+              AND NULLIF(s->>'txHash', '') IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'Shares must be unique, unpaid, transaction-free, and match non-payer members';
+        END IF;
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM pg_catalog.jsonb_array_elements(p_shares) AS s
@@ -1025,8 +1048,7 @@ BEGIN
            OR s->>'memberId' = p_paid_by_member_id
            OR NOT (s ? 'paid')
            OR pg_catalog.jsonb_typeof(s->'paid') <> 'boolean'
-           OR (s->>'paid')::BOOLEAN
-           OR NULLIF(s->>'txHash', '') IS NOT NULL
+           OR (NOT p_allow_paid AND ((s->>'paid')::BOOLEAN OR NULLIF(s->>'txHash', '') IS NOT NULL))
            OR COALESCE(s->>'amount', '') !~ '^(0|[1-9][0-9]*)(\.[0-9]{1,7})?$'
            OR NOT EXISTS (
                 SELECT 1
@@ -1370,24 +1392,35 @@ BEGIN
             END IF;
         END IF;
 
-        -- Creator cannot directly modify shares unless through mark_share_paid RPC (SX-026)
+        -- Creator cannot unmark a paid share (SX-034)
+        IF EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(OLD.shares) AS os
+            JOIN jsonb_array_elements(NEW.shares) AS ns
+              ON os->>'memberId' = ns->>'memberId'
+            WHERE COALESCE((os->>'paid')::boolean, false) = true
+              AND COALESCE((ns->>'paid')::boolean, false) = false
+        ) THEN
+            RAISE EXCEPTION 'Cannot unmark a paid share';
+        END IF;
+
+        -- Creator cannot directly modify shares unless through mark_share_paid RPC (SX-026 & SX-034)
         IF NEW.shares IS DISTINCT FROM OLD.shares AND NOT v_via_rpc THEN
             RAISE EXCEPTION 'Expense creator cannot directly modify shares; use mark_share_paid';
         END IF;
 
-        -- Re-validate allocation when payload modified without paid shares (SX-026)
-        IF NOT v_has_paid_share AND NOT v_via_rpc THEN
-            PERFORM public.assert_valid_expense_payload(
-                NEW.total_amount,
-                NEW.currency,
-                NEW.split_mode,
-                NEW.paid_by_member_id,
-                NEW.members,
-                NEW.shares,
-                NEW.created_by_wallet,
-                NEW.member_wallets
-            );
-        END IF;
+        -- For creator edits, run assert_valid_expense_payload against NEW (allowing already-paid shares to keep paid/txHash) (SX-034)
+        PERFORM public.assert_valid_expense_payload(
+            NEW.total_amount,
+            NEW.currency,
+            NEW.split_mode,
+            NEW.paid_by_member_id,
+            NEW.members,
+            NEW.shares,
+            NEW.created_by_wallet,
+            NEW.member_wallets,
+            true
+        );
     ELSE
         -- 3. Non-creator member validations: protect sensitive columns from tampering (SX-030)
         IF NEW.title <> OLD.title THEN
@@ -1539,6 +1572,7 @@ DECLARE
     v_caller TEXT;
     v_is_creator BOOLEAN;
     v_unsettled_count INTEGER;
+    v_expected_wallets TEXT[];
 BEGIN
     v_caller := public.settlex_wallet();
 
@@ -1623,6 +1657,9 @@ BEGIN
                OR jsonb_array_length(NEW.members) < 2 THEN
                 RAISE EXCEPTION 'A trip requires at least two members';
             END IF;
+            IF jsonb_array_length(NEW.members) > 50 THEN
+                RAISE EXCEPTION 'A trip supports at most 50 members';
+            END IF;
             IF EXISTS (
                 SELECT 1
                 FROM jsonb_array_elements(NEW.members) AS m
@@ -1638,6 +1675,30 @@ BEGIN
                 FROM jsonb_array_elements(NEW.members) AS m
             ) THEN
                 RAISE EXCEPTION 'Trip members require unique ids, names, and valid Stellar wallets';
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(NEW.members) AS m
+                WHERE m->>'walletAddress' = OLD.created_by_wallet
+            ) THEN
+                RAISE EXCEPTION 'Trip creator must be a trip member';
+            END IF;
+
+            SELECT COALESCE(
+                pg_catalog.array_agg(wallet ORDER BY wallet),
+                ARRAY[]::TEXT[]
+            )
+            INTO v_expected_wallets
+            FROM (
+                SELECT DISTINCT m->>'walletAddress' AS wallet
+                FROM jsonb_array_elements(NEW.members) AS m
+            ) AS wallets;
+
+            IF NEW.member_wallets IS NULL
+               OR pg_catalog.cardinality(NEW.member_wallets) <> pg_catalog.cardinality(v_expected_wallets)
+               OR NOT (NEW.member_wallets @> v_expected_wallets AND v_expected_wallets @> NEW.member_wallets) THEN
+                RAISE EXCEPTION 'member_wallets must exactly match trip members';
             END IF;
         END IF;
     ELSE

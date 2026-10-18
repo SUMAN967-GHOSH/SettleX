@@ -48,6 +48,28 @@ describe("Database Migrations and Security Hardening (Issue #194, SX-026 to SX-0
     expect(hardeningSql).toMatch(/Cannot reopen a settled expense/);
   });
 
+  it("implements SX-034 (Expense creator bypass protection and payload re-validation) in migrations", () => {
+    const hardeningSql = fs.readFileSync(
+      path.join(migrationsDir, "20261017000000_security_hardening.sql"),
+      "utf8"
+    );
+
+    // Creator cannot unmark a paid share
+    expect(hardeningSql).toMatch(/Cannot unmark a paid share/);
+
+    // Creator edits re-validate payload against NEW
+    expect(hardeningSql).toMatch(/assert_valid_expense_payload\(/);
+
+    // Valid transaction hash required when marking share as paid
+    expect(hardeningSql).toMatch(/Valid transaction hash is required/);
+
+    // Totals desynchronization prevention
+    expect(hardeningSql).toMatch(/Share amounts do not reconcile to total_amount/);
+
+    // Settled status consistency and reopen prevention
+    expect(hardeningSql).toMatch(/Cannot reopen a settled expense/);
+  });
+
   it("implements SX-027 (Trip creator bypass prevention) in migrations", () => {
     const hardeningSql = fs.readFileSync(
       path.join(migrationsDir, "20261017000000_security_hardening.sql"),
@@ -62,6 +84,10 @@ describe("Database Migrations and Security Hardening (Issue #194, SX-026 to SX-0
 
     // Cannot reopen settled trip
     expect(hardeningSql).toMatch(/Cannot reopen a settled trip/);
+
+    // Re-validate members and member_wallets consistency
+    expect(hardeningSql).toMatch(/member_wallets must exactly match trip members/);
+    expect(hardeningSql).toMatch(/Trip creator must be a trip member/);
   });
 
   it("implements SX-028 (mark_share_paid global uniqueness & already-paid check) in migrations", () => {
@@ -145,9 +171,16 @@ describe("Database Migrations and Security Hardening (Issue #194, SX-026 to SX-0
     expect(pgtapContent).toMatch(/SX-028: Creator override is flagged with manual: true/);
     expect(pgtapContent).toMatch(/SX-027: Trip creator cannot remove existing expenses/);
     expect(pgtapContent).toMatch(/SX-027: Cannot settle trip while linked expenses are unsettled/);
+    expect(pgtapContent).toMatch(/SX-027: Trip creator cannot reopen a settled trip/);
+    expect(pgtapContent).toMatch(/SX-027: Trip creator cannot desync members and member_wallets/);
+    expect(pgtapContent).toMatch(/SX-027: Trip creator cannot remove themselves from trip/);
     expect(pgtapContent).toMatch(/SX-029: Non-UUID expense_ids rejected/);
     expect(pgtapContent).toMatch(/SX-030: Non-creator cannot tamper with share name or attributes/);
     expect(pgtapContent).toMatch(/SX-030: Non-creator cannot arbitrarily alter version/);
+    expect(pgtapContent).toMatch(/SX-034: Creator cannot mark paid without a valid hash/);
+    expect(pgtapContent).toMatch(/SX-034: Creator cannot unmark a paid share/);
+    expect(pgtapContent).toMatch(/SX-034: Creator cannot desync totals/);
+    expect(pgtapContent).toMatch(/SX-034: Creator cannot reopen a settled expense/);
     expect(pgtapContent).toMatch(/SELECT \* FROM finish\(\);/);
   });
 
