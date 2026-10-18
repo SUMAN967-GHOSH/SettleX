@@ -143,6 +143,24 @@ SELECT throws_ok(
     'SX-028: Global duplicate transaction hash reuse is rejected'
 );
 
+-- Creator manual override marks share paid and flags it with manual: true (SX-028)
+SELECT set_config('request.jwt.claims', '{"wallet_address": "GALICE11111111111111111111111111111111111111111111111111111", "iat": 1700000000}', true);
+
+SELECT lives_ok(
+    $$ SELECT public.mark_share_paid(
+           'e0000000-0000-0000-0000-000000000002'::uuid,
+           'm-charlie',
+           'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+       ) $$,
+    'SX-028: Creator manual override mark_share_paid succeeds'
+);
+
+SELECT results_eq(
+    $$ SELECT (shares->0->>'manual')::boolean FROM public.expenses WHERE id = 'e0000000-0000-0000-0000-000000000002' $$,
+    $$ VALUES (true) $$,
+    'SX-028: Creator override is flagged with manual: true'
+);
+
 -- ─── SX-026: Financial Terms Freeze ──────────────────────────────────────────
 
 SELECT set_config('request.jwt.claims', '{"wallet_address": "GALICE11111111111111111111111111111111111111111111111111111", "iat": 1700000000}', true);
@@ -193,6 +211,40 @@ SELECT throws_ok(
        WHERE id = 't0000000-0000-0000-0000-000000000001' $$,
     'Cannot settle trip while linked expenses remain unsettled',
     'SX-027: Cannot settle trip while linked expenses are unsettled'
+);
+
+SELECT lives_ok(
+    $$ UPDATE public.trips
+       SET settled = true
+       WHERE id = 't0000000-0000-0000-0000-000000000001' $$,
+    'SX-027: Valid trip settlement succeeds when all linked expenses are settled'
+);
+
+SELECT throws_ok(
+    $$ UPDATE public.trips
+       SET settled = false
+       WHERE id = 't0000000-0000-0000-0000-000000000001' $$,
+    'Cannot reopen a settled trip',
+    'SX-027: Trip creator cannot reopen a settled trip'
+);
+
+SELECT throws_ok(
+    $$ UPDATE public.trips
+       SET members = '[{"id":"m-alice","name":"Alice","walletAddress":"GALICE11111111111111111111111111111111111111111111111111111"},
+                       {"id":"m-charlie","name":"Charlie","walletAddress":"GCHARLIE3333333333333333333333333333333333333333333333333333"}]'::jsonb
+       WHERE id = 't0000000-0000-0000-0000-000000000001' $$,
+    'member_wallets must exactly match trip members',
+    'SX-027: Trip creator cannot desync members and member_wallets'
+);
+
+SELECT throws_ok(
+    $$ UPDATE public.trips
+       SET members = '[{"id":"m-bob","name":"Bob","walletAddress":"GBOB22222222222222222222222222222222222222222222222222222222"},
+                       {"id":"m-charlie","name":"Charlie","walletAddress":"GCHARLIE3333333333333333333333333333333333333333333333333333"}]'::jsonb,
+           member_wallets = ARRAY['GBOB22222222222222222222222222222222222222222222222222222222', 'GCHARLIE3333333333333333333333333333333333333333333333333333']
+       WHERE id = 't0000000-0000-0000-0000-000000000001' $$,
+    'Creator cannot be removed from member_wallets',
+    'SX-027: Trip creator cannot remove themselves from trip'
 );
 
 -- ─── SX-029: Trip expense_ids Injection Tests ────────────────────────────────
@@ -260,6 +312,57 @@ SELECT throws_ok(
        WHERE id = 'e0000000-0000-0000-0000-000000000002' $$,
     'Version must increment by exactly 1',
     'SX-030: Non-creator cannot arbitrarily alter version'
+);
+
+
+-- ─── SX-034: Expense Creator Bypass Protection Tests (Issue #186) ───────────
+
+SELECT set_config('request.jwt.claims', '{"wallet_address": "GALICE11111111111111111111111111111111111111111111111111111", "iat": 1700000000}', true);
+
+-- 1. Creator cannot mark paid without a valid hash
+SELECT throws_ok(
+    $$ SELECT public.mark_share_paid(
+           'e0000000-0000-0000-0000-000000000002'::uuid,
+           'm-charlie',
+           'invalid-hash'
+       ) $$,
+    'Valid transaction hash is required to mark a share as paid',
+    'SX-034: Creator cannot mark paid without a valid hash'
+);
+
+SELECT throws_ok(
+    $$ UPDATE public.expenses
+       SET shares = '[{"memberId":"m-charlie","name":"Charlie","walletAddress":"GCHARLIE3333333333333333333333333333333333333333333333333333","amount":"30","currency":"XLM","shareType":"equal","weight":1,"percentage":"50","paid":true,"txHash":null}]'::jsonb
+       WHERE id = 'e0000000-0000-0000-0000-000000000002' $$,
+    'Expense creator cannot directly modify shares; use mark_share_paid',
+    'SX-034: Creator cannot directly mark paid without a valid hash'
+);
+
+-- 2. Creator cannot unmark a paid share
+SELECT throws_ok(
+    $$ UPDATE public.expenses
+       SET shares = '[{"memberId":"m-bob","name":"Bob","walletAddress":"GBOB22222222222222222222222222222222222222222222222222222222","amount":"50","currency":"XLM","shareType":"equal","weight":1,"percentage":"50","paid":false,"txHash":null}]'::jsonb
+       WHERE id = 'e0000000-0000-0000-0000-000000000001' $$,
+    'Cannot unmark a paid share',
+    'SX-034: Creator cannot unmark a paid share'
+);
+
+-- 3. Creator cannot desync totals
+SELECT throws_ok(
+    $$ UPDATE public.expenses
+       SET total_amount = '500'
+       WHERE id = 'e0000000-0000-0000-0000-000000000002' $$,
+    'Share amounts do not reconcile to total_amount',
+    'SX-034: Creator cannot desync totals'
+);
+
+-- 4. Creator cannot reopen a settled expense
+SELECT throws_ok(
+    $$ UPDATE public.expenses
+       SET settled = false
+       WHERE id = 'e0000000-0000-0000-0000-000000000001' $$,
+    'Cannot reopen a settled expense',
+    'SX-034: Creator cannot reopen a settled expense'
 );
 
 SELECT * FROM finish();
